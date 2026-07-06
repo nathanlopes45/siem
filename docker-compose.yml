@@ -1,0 +1,29 @@
+version: "3.9"
+
+services:
+  db:
+    image: postgres:15
+    container_name: siem_postgres
+    environment:
+      POSTGRES_USER: siem_user
+      POSTGRES_PASSWORD: siem_password
+      POSTGRES_DB: siem_db
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+
+  api:
+    build: .
+    container_name: siem_api
+    depends_on:
+      - db
+    environment:
+      DATABASE_URL: postgresql://siem_user:siem_password@db:5432/siem_db
+    ports:
+      - "8000:8000"
+    volumes:
+      - ./app:/app/app
+
+volumes:
+  postgres_data:
