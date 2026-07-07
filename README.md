@@ -14,8 +14,8 @@ Most SIEM experience on a resume comes from clicking around Splunk or Sentinel d
                  │  (ingest +  │
                  │  detection) │
                  └──────┬──────┘
-                         │
-                         ▼
+                        │
+                        ▼
                  ┌─────────────┐
                  │  PostgreSQL │
                  │ hosts/logs/ │
