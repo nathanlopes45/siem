@@ -4,45 +4,47 @@ A custom-built SIEM backend that ingests logs, correlates events, and raises ale
 
 ## Why this project exists
 
-Most SIEM experience on a resume comes from clicking around Splunk or Sentinel dashboards. This project goes one layer deeper: designing the log schema, writing the correlation logic, and reasoning about detection tradeoffs (false positives, alert fatigue, time-window sizing) myself.
+Most SIEM experience on a resume comes from clicking around Splunk or Sentinel dashboards. This project goes one layer deeper: designing the log schema, writing the correlation logic, and reasoning about detection tradeoffs (false positives, alert fatigue, time-window sizing, ingestion vs. detection latency) myself.
 
 ## Architecture
 
 ```
                  ┌─────────────┐
-   raw logs ───► │   FastAPI   │
-                 │  (ingest +  │
-                 │  detection) │
+   raw logs ───► │   FastAPI   │──── fast path: parse + store only
+                 │  (ingest)   │
                  └──────┬──────┘
                         │
                         ▼
-                 ┌─────────────┐
-                 │  PostgreSQL │
-                 │ hosts/logs/ │
-                 │   alerts    │
-                 └─────────────┘
+                ┌───────────────┐        ┌────────────────────┐
+                │   PostgreSQL  │◄──────►│  Detection Worker  │
+                │ hosts/logs/   │  polls │  (separate proc.,  │
+                │   alerts      │  every │   runs on a timer) │
+                └───────────────┘   10s  └────────────────────┘
 ```
 
-- **API layer**: FastAPI, handles log ingestion and exposes query endpoints for hosts, logs, and alerts
-- **Storage**: PostgreSQL via SQLAlchemy ORM
-- **Detection engine**: runs correlation rules against ingested logs on each write (roadmap: move to an async background worker — see below)
-- **Deployment**: fully containerized with Docker Compose (API + Postgres)
+- **API layer**: FastAPI. Ingestion is deliberately "dumb and fast" — parse structured fields from the raw log, store it, return. No detection logic runs on the request path.
+- **Detection worker**: a separate process/container that polls the database on a fixed interval and runs every detection rule against each host. Decoupled so a slow, expensive, or failing detector (e.g. an ML model, an external threat-intel API call) can never add latency to log ingestion, and detection can be scaled independently of the API.
+- **Log parsing**: structured field extraction (event type, username, source IP, source port) at ingest time, rather than one generic regex grabbing an IP out of an opaque string.
+- **Storage**: PostgreSQL via SQLAlchemy ORM, with indexes on the columns every detector actually filters/groups by.
+- **Deployment**: fully containerized with Docker Compose (API + worker + Postgres, three independent services sharing one database).
 
 ## Detections implemented
 
 | Detection | Logic | MITRE ATT&CK |
 |---|---|---|
-| Brute Force Attempt | ≥5 failed password attempts from one IP against a host | [T1110 – Brute Force](https://attack.mitre.org/techniques/T1110/) |
-| Rapid Brute Force | ≥5 failed attempts from one IP within a 2-minute window | T1110 (time-boxed variant) |
-| Successful Brute Force | A successful login from an IP that had ≥5 prior failed attempts | T1110 → T1078 (Valid Accounts, post-compromise) |
-| Threat Intel Match | Log contains a source IP found on a known-malicious IP list | [T1071 – Application Layer Protocol](https://attack.mitre.org/techniques/T1071/) (C2 infrastructure reuse) |
+| Brute Force Attempt | ≥5 `failed_password` events from one IP against a host | [T1110 – Brute Force](https://attack.mitre.org/techniques/T1110/) |
+| Rapid Brute Force | ≥5 `failed_password` events from one IP within a 2-minute window | T1110 (time-boxed variant) |
+| Successful Brute Force | An `accepted_password` event from an IP that had ≥5 prior `failed_password` events | T1110 → T1078 (Valid Accounts, post-compromise) |
+| Threat Intel Match | Log's source IP matches a known-malicious IP list | [T1071 – Application Layer Protocol](https://attack.mitre.org/techniques/T1071/) (C2 infrastructure reuse) |
+
+All detections run against structured, parsed fields (`event_type`, `attacker_ip`) rather than raw-text pattern matching, and use aggregated `GROUP BY`/`HAVING` queries rather than pulling every row into Python.
 
 ## Tech stack
 
 - **Backend**: Python, FastAPI, SQLAlchemy
 - **Database**: PostgreSQL
-- **Containerization**: Docker, Docker Compose
-- **Detection engineering**: custom correlation rules (regex-based log parsing, IP extraction, time-windowed aggregation)
+- **Containerization**: Docker, Docker Compose (API, worker, and DB as independent services)
+- **Detection engineering**: custom correlation rules, structured log parsing, aggregated queries, decoupled background detection worker
 
 ## Getting started
 
@@ -59,7 +61,7 @@ cp .env.example .env
 docker compose up --build
 ```
 
-The API will be available at `http://localhost:8000`.
+This starts three containers: `siem_postgres`, `siem_api`, and `siem_worker`. The API is available at `http://localhost:8000`. The worker runs silently in the background, polling every 10 seconds.
 
 ### Verify it's running
 
@@ -78,24 +80,30 @@ curl -X POST "http://localhost:8000/hosts?hostname=web-server-01&ip_address=10.0
 ### Ingest a log
 ```bash
 curl -X POST "http://localhost:8000/logs" \
-  -d "host_id=<HOST_UUID>" \
-  -d "log_source=sshd" \
-  -d "raw_log=Failed password for root from 185.220.101.1 port 4444 ssh2"
+  -H "Content-Type: application/json" \
+  -d '{"host_id": "<HOST_UUID>", "log_source": "sshd", "raw_log": "Failed password for root from 185.220.101.1 port 4444 ssh2"}'
 ```
+
+The response includes structured fields extracted by the parser: `event_type`, `username`, `attacker_ip`, `src_port`.
 
 ### List hosts
 ```bash
 curl http://localhost:8000/hosts
 ```
 
-### Query logs (optionally filter by host or source)
+### Query logs (optionally filter by host, source, or event type)
 ```bash
-curl "http://localhost:8000/logs?host_id=<HOST_UUID>&log_source=sshd"
+curl "http://localhost:8000/logs?host_id=<HOST_UUID>&event_type=failed_password"
 ```
 
 ### View triggered alerts
 ```bash
 curl http://localhost:8000/alerts
+```
+
+### Manually trigger detection for a host (useful for demos — the worker also does this automatically every 10s)
+```bash
+curl -X POST "http://localhost:8000/detect/<HOST_UUID>"
 ```
 
 ## Security practices in this repo
@@ -106,14 +114,15 @@ curl http://localhost:8000/alerts
 
 ## Roadmap
 
-- [ ] Real log parsers for syslog/auth.log formats (structured fields instead of single regex IP extraction)
-- [ ] Move detection engine to an async background worker, decoupled from the ingestion request path
+- [x] Real log parsing (structured `event_type`/`username`/`src_port` fields instead of a single regex-extracted IP)
+- [x] Decoupled background detection worker (moved off the ingestion request path)
 - [ ] Cross-host correlation (e.g., same attacker IP hitting multiple hosts — lateral movement / credential stuffing signal)
 - [ ] API authentication
 - [ ] Alerting integrations (Slack/webhook notifications on new alerts)
 - [ ] LLM-assisted alert triage: natural-language incident summaries and severity suggestions generated from raw log context
 - [ ] Dashboard for visualizing alerts and log volume over time
 - [ ] Automated test suite for detection logic
+- [ ] Support additional log source formats beyond SSH (e.g. web server access logs)
 
 ## License
 
