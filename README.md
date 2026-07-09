@@ -57,11 +57,13 @@ All detections run against structured, parsed fields (`event_type`, `attacker_ip
 git clone https://github.com/nathanlopes45/siem.git
 cd siem
 cp .env.example .env
-# edit .env and set a real password for POSTGRES_PASSWORD
+# edit .env: set a real POSTGRES_PASSWORD and a long random API_KEY
 docker compose up --build
 ```
 
 This starts three containers: `siem_postgres`, `siem_api`, and `siem_worker`. The API is available at `http://localhost:8000`. The worker runs silently in the background, polling every 10 seconds.
+
+Every endpoint except the root health check (`GET /`) requires an `X-API-Key` header matching the `API_KEY` value in your `.env`.
 
 ### Verify it's running
 
@@ -72,14 +74,21 @@ curl http://localhost:8000/
 
 ## API usage
 
+All requests below require your API key. Export it once per terminal session so you don't have to repeat it:
+```bash
+API_KEY="your-api-key-from-.env"
+```
+
 ### Register a host
 ```bash
-curl -X POST "http://localhost:8000/hosts?hostname=web-server-01&ip_address=10.0.0.5&os_type=linux"
+curl -X POST "http://localhost:8000/hosts?hostname=web-server-01&ip_address=10.0.0.5&os_type=linux" \
+  -H "X-API-Key: $API_KEY"
 ```
 
 ### Ingest a log
 ```bash
 curl -X POST "http://localhost:8000/logs" \
+  -H "X-API-Key: $API_KEY" \
   -H "Content-Type: application/json" \
   -d '{"host_id": "<HOST_UUID>", "log_source": "sshd", "raw_log": "Failed password for root from 185.220.101.1 port 4444 ssh2"}'
 ```
@@ -88,22 +97,23 @@ The response includes structured fields extracted by the parser: `event_type`, `
 
 ### List hosts
 ```bash
-curl http://localhost:8000/hosts
+curl http://localhost:8000/hosts -H "X-API-Key: $API_KEY"
 ```
 
 ### Query logs (optionally filter by host, source, or event type)
 ```bash
-curl "http://localhost:8000/logs?host_id=<HOST_UUID>&event_type=failed_password"
+curl "http://localhost:8000/logs?host_id=<HOST_UUID>&event_type=failed_password" \
+  -H "X-API-Key: $API_KEY"
 ```
 
 ### View triggered alerts
 ```bash
-curl http://localhost:8000/alerts
+curl http://localhost:8000/alerts -H "X-API-Key: $API_KEY"
 ```
 
 ### Manually trigger detection for a host (useful for demos — the worker also does this automatically every 10s)
 ```bash
-curl -X POST "http://localhost:8000/detect/<HOST_UUID>"
+curl -X POST "http://localhost:8000/detect/<HOST_UUID>" -H "X-API-Key: $API_KEY"
 ```
 
 ## Security practices in this repo
@@ -116,8 +126,8 @@ curl -X POST "http://localhost:8000/detect/<HOST_UUID>"
 
 - [x] Real log parsing (structured `event_type`/`username`/`src_port` fields instead of a single regex-extracted IP)
 - [x] Decoupled background detection worker (moved off the ingestion request path)
+- [x] API authentication (API key required on every endpoint except health check)
 - [ ] Cross-host correlation (e.g., same attacker IP hitting multiple hosts — lateral movement / credential stuffing signal)
-- [ ] API authentication
 - [ ] Alerting integrations (Slack/webhook notifications on new alerts)
 - [ ] LLM-assisted alert triage: natural-language incident summaries and severity suggestions generated from raw log context
 - [ ] Dashboard for visualizing alerts and log volume over time

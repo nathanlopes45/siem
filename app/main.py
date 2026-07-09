@@ -7,6 +7,7 @@ from .database import engine, get_db
 from . import models
 from .parsers import parse_log
 from .detections import run_all_detections
+from .auth import require_api_key
 
 app = FastAPI(title="Custom SIEM")
 
@@ -21,10 +22,12 @@ class LogIngest(BaseModel):
 
 @app.get("/")
 def root():
+    """Left unauthenticated on purpose — a basic liveness check for
+    orchestration/monitoring tools shouldn't require a secret."""
     return {"status": "SIEM backend running with database connected"}
 
 
-@app.post("/hosts")
+@app.post("/hosts", dependencies=[Depends(require_api_key)])
 def create_host(hostname: str, ip_address: str, os_type: str, db: Session = Depends(get_db)):
     new_host = models.Host(
         hostname=hostname,
@@ -37,12 +40,12 @@ def create_host(hostname: str, ip_address: str, os_type: str, db: Session = Depe
     return new_host
 
 
-@app.get("/hosts")
+@app.get("/hosts", dependencies=[Depends(require_api_key)])
 def list_hosts(db: Session = Depends(get_db)):
     return db.query(models.Host).all()
 
 
-@app.post("/logs")
+@app.post("/logs", dependencies=[Depends(require_api_key)])
 def ingest_log(
     payload: LogIngest,
     db: Session = Depends(get_db)
@@ -71,7 +74,7 @@ def ingest_log(
     return new_log
 
 
-@app.get("/logs")
+@app.get("/logs", dependencies=[Depends(require_api_key)])
 def get_logs(
     host_id: Optional[UUID] = Query(None),
     log_source: Optional[str] = Query(None),
@@ -94,12 +97,12 @@ def get_logs(
     return logs
 
 
-@app.get("/alerts")
+@app.get("/alerts", dependencies=[Depends(require_api_key)])
 def get_alerts(db: Session = Depends(get_db)):
     return db.query(models.Alert).order_by(models.Alert.created_at.desc()).all()
 
 
-@app.post("/detect/{host_id}")
+@app.post("/detect/{host_id}", dependencies=[Depends(require_api_key)])
 def trigger_detection(host_id: UUID, db: Session = Depends(get_db)):
     """
     Manual trigger for detection on a single host — useful for testing/demos
