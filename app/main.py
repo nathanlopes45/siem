@@ -6,7 +6,7 @@ from typing import Optional
 from .database import engine, get_db
 from . import models
 from .parsers import parse_log
-from .detections import run_all_detections
+from .detections import run_all_detections, detect_cross_host_correlation
 from .auth import require_api_key
 
 app = FastAPI(title="Custom SIEM")
@@ -111,3 +111,14 @@ def trigger_detection(host_id: UUID, db: Session = Depends(get_db)):
     """
     run_all_detections(db, host_id)
     return {"status": f"Detection run complete for host {host_id}"}
+
+
+@app.post("/detect-cross-host", dependencies=[Depends(require_api_key)])
+def trigger_cross_host_detection(db: Session = Depends(get_db)):
+    """
+    Manual trigger for the fleet-wide cross-host correlation rule. Same
+    testing/demo rationale as /detect/{host_id} — the worker runs this
+    automatically every cycle regardless.
+    """
+    detect_cross_host_correlation(db)
+    return {"status": "Cross-host correlation detection run complete"}

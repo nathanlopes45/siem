@@ -15,11 +15,11 @@ Most SIEM experience on a resume comes from clicking around Splunk or Sentinel d
                  └──────┬──────┘
                         │
                         ▼
-                ┌───────────────┐        ┌────────────────────┐
-                │   PostgreSQL  │◄──────►│  Detection Worker  │
-                │ hosts/logs/   │  polls │  (separate proc.,  │
-                │   alerts      │  every │   runs on a timer) │
-                └───────────────┘   10s  └────────────────────┘
+                ┌───────────────┐        ┌──────────────────┐
+                │   PostgreSQL   │◄──────►│  Detection Worker │
+                │ hosts/logs/    │  polls │  (separate proc.,  │
+                │   alerts       │  every │   runs on a timer) │
+                └───────────────┘  10s   └──────────────────┘
 ```
 
 - **API layer**: FastAPI. Ingestion is deliberately "dumb and fast" — parse structured fields from the raw log, store it, return. No detection logic runs on the request path.
@@ -36,6 +36,7 @@ Most SIEM experience on a resume comes from clicking around Splunk or Sentinel d
 | Rapid Brute Force | ≥5 `failed_password` events from one IP within a 2-minute window | T1110 (time-boxed variant) |
 | Successful Brute Force | An `accepted_password` event from an IP that had ≥5 prior `failed_password` events | T1110 → T1078 (Valid Accounts, post-compromise) |
 | Threat Intel Match | Log's source IP matches a known-malicious IP list | [T1071 – Application Layer Protocol](https://attack.mitre.org/techniques/T1071/) (C2 infrastructure reuse) |
+| Cross-Host Brute Force | One source IP with failed logins against ≥3 distinct hosts within 30 minutes | [T1110 – Brute Force](https://attack.mitre.org/techniques/T1110/) (fleet-wide targeting — reconnaissance / credential stuffing signal, not scoped to a single host) |
 
 All detections run against structured, parsed fields (`event_type`, `attacker_ip`) rather than raw-text pattern matching, and use aggregated `GROUP BY`/`HAVING` queries rather than pulling every row into Python.
 
@@ -116,6 +117,11 @@ curl http://localhost:8000/alerts -H "X-API-Key: $API_KEY"
 curl -X POST "http://localhost:8000/detect/<HOST_UUID>" -H "X-API-Key: $API_KEY"
 ```
 
+### Manually trigger the fleet-wide cross-host correlation check
+```bash
+curl -X POST "http://localhost:8000/detect-cross-host" -H "X-API-Key: $API_KEY"
+```
+
 ## Security practices in this repo
 
 - No secrets committed — credentials are loaded from a gitignored `.env`, with `.env.example` as the template
@@ -127,7 +133,7 @@ curl -X POST "http://localhost:8000/detect/<HOST_UUID>" -H "X-API-Key: $API_KEY"
 - [x] Real log parsing (structured `event_type`/`username`/`src_port` fields instead of a single regex-extracted IP)
 - [x] Decoupled background detection worker (moved off the ingestion request path)
 - [x] API authentication (API key required on every endpoint except health check)
-- [ ] Cross-host correlation (e.g., same attacker IP hitting multiple hosts — lateral movement / credential stuffing signal)
+- [x] Cross-host correlation (same attacker IP hitting multiple hosts — lateral movement / credential stuffing signal)
 - [ ] Alerting integrations (Slack/webhook notifications on new alerts)
 - [ ] LLM-assisted alert triage: natural-language incident summaries and severity suggestions generated from raw log context
 - [ ] Dashboard for visualizing alerts and log volume over time

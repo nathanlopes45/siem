@@ -23,9 +23,11 @@ THREAT_INTEL_IPS = {
 }
 
 BRUTEFORCE_THRESHOLD = 5
+CROSS_HOST_HOST_THRESHOLD = 3   # distinct hosts an IP must hit to count as cross-host correlation
+CROSS_HOST_WINDOW_MINUTES = 30
 
 
-def _create_alert_if_new(db: Session, host_id: UUID, alert_type: str, description: str):
+def _create_alert_if_new(db: Session, host_id: Optional[UUID], alert_type: str, description: str):
     existing = db.query(models.Alert).filter(
         models.Alert.host_id == host_id,
         models.Alert.description == description
@@ -108,6 +110,44 @@ def detect_threat_intel(db: Session, host_id: UUID):
         _create_alert_if_new(
             db, host_id, "Threat Intel Match",
             f"Known malicious IP {ip} detected"
+        )
+
+
+def detect_cross_host_correlation(db: Session):
+    """
+    Unlike every other detector, this is NOT scoped to a single host — it
+    looks for one source IP with failed_password attempts against multiple
+    DISTINCT hosts within a recent window. A single host being brute-forced
+    is noisy but common; the same IP hitting 3+ different hosts in 30
+    minutes is a much stronger signal of deliberate reconnaissance or
+    credential-stuffing across your whole environment (MITRE T1110, with
+    lateral-movement / infrastructure-wide targeting context).
+
+    Because this isn't host-scoped, the resulting Alert has host_id=None —
+    it's a fleet-wide finding, not a per-host one.
+    """
+    since = datetime.utcnow() - timedelta(minutes=CROSS_HOST_WINDOW_MINUTES)
+
+    results = (
+        db.query(
+            models.RawLog.attacker_ip,
+            func.count(func.distinct(models.RawLog.host_id)).label("host_count"),
+        )
+        .filter(
+            models.RawLog.event_type == "failed_password",
+            models.RawLog.attacker_ip.isnot(None),
+            models.RawLog.received_at >= since,
+        )
+        .group_by(models.RawLog.attacker_ip)
+        .having(func.count(func.distinct(models.RawLog.host_id)) >= CROSS_HOST_HOST_THRESHOLD)
+        .all()
+    )
+
+    for ip, host_count in results:
+        _create_alert_if_new(
+            db, None, "Cross-Host Brute Force",
+            f"IP {ip} attempted failed logins against {host_count} distinct hosts "
+            f"within {CROSS_HOST_WINDOW_MINUTES} minutes"
         )
 
 

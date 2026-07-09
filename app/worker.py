@@ -17,7 +17,7 @@ import logging
 
 from .database import SessionLocal
 from . import models
-from .detections import run_all_detections
+from .detections import run_all_detections, detect_cross_host_correlation
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s [worker] %(message)s")
 logger = logging.getLogger("siem-worker")
@@ -31,6 +31,10 @@ def run_detection_cycle():
         host_ids = [row[0] for row in db.query(models.Host.id).distinct().all()]
         for host_id in host_ids:
             run_all_detections(db, host_id)
+
+        # Not host-scoped — runs once per cycle across all hosts, not once per host
+        detect_cross_host_correlation(db)
+
         logger.info(f"Detection cycle complete — checked {len(host_ids)} host(s)")
     except Exception:
         logger.exception("Detection cycle failed")

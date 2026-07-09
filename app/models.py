@@ -39,6 +39,9 @@ class RawLog(Base):
         # speeds up "failed_password logs for this host" — now an equality
         # lookup instead of the old leading-wildcard ilike scan
         Index("ix_rawlog_host_event_type", "host_id", "event_type"),
+        # supports detect_cross_host_correlation, which groups by
+        # attacker_ip across ALL hosts filtered by event_type + received_at
+        Index("ix_rawlog_event_received_ip", "event_type", "received_at", "attacker_ip"),
     )
 
 
