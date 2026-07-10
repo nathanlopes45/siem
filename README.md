@@ -15,11 +15,11 @@ Most SIEM experience on a resume comes from clicking around Splunk or Sentinel d
                  └──────┬──────┘
                         │
                         ▼
-                ┌───────────────┐        ┌──────────────────┐
-                │   PostgreSQL   │◄──────►│  Detection Worker │
-                │ hosts/logs/    │  polls │  (separate proc.,  │
-                │   alerts       │  every │   runs on a timer) │
-                └───────────────┘  10s   └──────────────────┘
+                ┌───────────────┐        ┌────────────────────┐
+                │   PostgreSQL  │◄──────►│  Detection Worker  │
+                │ hosts/logs/   │  polls │  (separate proc.,  │
+                │   alerts      │  every │   runs on a timer) │
+                └───────────────┘   10s  └────────────────────┘
 ```
 
 - **API layer**: FastAPI. Ingestion is deliberately "dumb and fast" — parse structured fields from the raw log, store it, return. No detection logic runs on the request path.
@@ -59,6 +59,8 @@ git clone https://github.com/nathanlopes45/siem.git
 cd siem
 cp .env.example .env
 # edit .env: set a real POSTGRES_PASSWORD and a long random API_KEY
+# optional: set ALERT_WEBHOOK_URL to a Slack Incoming Webhook URL to get
+# notified when new alerts fire. Leave blank to disable notifications.
 docker compose up --build
 ```
 
@@ -122,6 +124,10 @@ curl -X POST "http://localhost:8000/detect/<HOST_UUID>" -H "X-API-Key: $API_KEY"
 curl -X POST "http://localhost:8000/detect-cross-host" -H "X-API-Key: $API_KEY"
 ```
 
+## Alerting
+
+New alerts (not duplicates — only genuinely new findings) trigger a webhook POST if `ALERT_WEBHOOK_URL` is set in `.env`. This works out of the box with [Slack Incoming Webhooks](https://api.slack.com/messaging/webhooks): create one in your workspace, paste the URL into `.env`, and new alerts will post directly to a Slack channel. If the webhook isn't configured, or the request fails, notification is skipped silently — this can never block or break the detection engine itself.
+
 ## Security practices in this repo
 
 - No secrets committed — credentials are loaded from a gitignored `.env`, with `.env.example` as the template
@@ -134,7 +140,7 @@ curl -X POST "http://localhost:8000/detect-cross-host" -H "X-API-Key: $API_KEY"
 - [x] Decoupled background detection worker (moved off the ingestion request path)
 - [x] API authentication (API key required on every endpoint except health check)
 - [x] Cross-host correlation (same attacker IP hitting multiple hosts — lateral movement / credential stuffing signal)
-- [ ] Alerting integrations (Slack/webhook notifications on new alerts)
+- [x] Alerting integrations (Slack/webhook notifications on new alerts)
 - [ ] LLM-assisted alert triage: natural-language incident summaries and severity suggestions generated from raw log context
 - [ ] Dashboard for visualizing alerts and log volume over time
 - [ ] Automated test suite for detection logic

@@ -15,6 +15,7 @@ from sqlalchemy import func
 from sqlalchemy.orm import Session
 
 from . import models
+from .notifications import send_alert_notification
 
 THREAT_INTEL_IPS = {
     "185.220.101.1",   # TOR exit node
@@ -36,6 +37,11 @@ def _create_alert_if_new(db: Session, host_id: Optional[UUID], alert_type: str, 
         return
     db.add(models.Alert(host_id=host_id, alert_type=alert_type, description=description))
     db.commit()
+
+    # Only fires for genuinely new alerts, never for duplicates — this is
+    # what keeps notification volume sane instead of re-pinging on every
+    # detection cycle for an attack that's already been alerted on.
+    send_alert_notification(alert_type, description, host_id)
 
 
 def detect_bruteforce(db: Session, host_id: UUID, window_minutes: Optional[int] = None):
