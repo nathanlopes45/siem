@@ -15,18 +15,28 @@ Most SIEM experience on a resume comes from clicking around Splunk or Sentinel d
                  └──────┬──────┘
                         │
                         ▼
-                ┌───────────────┐        ┌──────────────────┐
-                │   PostgreSQL   │◄──────►│  Detection Worker │
-                │ hosts/logs/    │  polls │  (separate proc.,  │
-                │   alerts       │  every │   runs on a timer) │
-                └───────────────┘  10s   └──────────────────┘
+                ┌───────────────┐        ┌────────────────────┐
+                │   PostgreSQL   │◄──────►│  Detection Worker   │
+                │ hosts/logs/    │  polls │  (separate process, │
+                │   alerts       │  every │   runs on a timer)  │
+                └───────┬───────┘  10s   └────────────────────┘
+                        │
+                        │ on-demand triage request
+                        ▼
+                ┌───────────────┐
+                │  Ollama (LLM)  │  local, free, no API key —
+                │  llama3.2:1b   │  alert data never leaves
+                └───────────────┘  the machine
 ```
 
 - **API layer**: FastAPI. Ingestion is deliberately "dumb and fast" — parse structured fields from the raw log, store it, return. No detection logic runs on the request path.
-- **Detection worker**: a separate process/container that polls the database on a fixed interval and runs every detection rule against each host. Decoupled so a slow, expensive, or failing detector (e.g. an ML model, an external threat-intel API call) can never add latency to log ingestion, and detection can be scaled independently of the API.
+- **Detection worker**: a separate process/container that polls the database on a fixed interval and runs every detection rule against each host, plus one fleet-wide cross-host correlation check per cycle. Decoupled so a slow or failing detector can never add latency to log ingestion.
+- **LLM triage**: a locally-run open-source model (via [Ollama](https://ollama.com)) generates a plain-English summary, severity rating, and recommended action for an alert on demand — free, no external API, and no security log data ever leaves the machine. Purely advisory; nothing in the pipeline acts automatically on the model's output.
 - **Log parsing**: structured field extraction (event type, username, source IP, source port) at ingest time, rather than one generic regex grabbing an IP out of an opaque string.
+- **Alerting**: genuinely new alerts (not duplicates) fire a Slack/webhook notification.
 - **Storage**: PostgreSQL via SQLAlchemy ORM, with indexes on the columns every detector actually filters/groups by.
-- **Deployment**: fully containerized with Docker Compose (API + worker + Postgres, three independent services sharing one database).
+- **Testing**: a pytest suite runs the real detection logic against a real (throwaway) Postgres database, including a regression test for a bug found and fixed during development.
+- **Deployment**: fully containerized with Docker Compose — API, worker, Postgres, and Ollama as independent services sharing one database.
 
 ## Detections implemented
 
@@ -44,8 +54,11 @@ All detections run against structured, parsed fields (`event_type`, `attacker_ip
 
 - **Backend**: Python, FastAPI, SQLAlchemy
 - **Database**: PostgreSQL
-- **Containerization**: Docker, Docker Compose (API, worker, and DB as independent services)
-- **Detection engineering**: custom correlation rules, structured log parsing, aggregated queries, decoupled background detection worker
+- **AI**: Ollama running `llama3.2:1b` locally for LLM-assisted alert triage — no external API, no cost, log data stays on-machine
+- **Containerization**: Docker, Docker Compose (API, worker, Postgres, and Ollama as independent services)
+- **Security**: API key authentication (constant-time comparison, fail-closed), gitignored secrets, `detect-secrets` scanning
+- **Detection engineering**: custom correlation rules (single-host and cross-host), structured log parsing, aggregated SQL queries, decoupled background detection worker
+- **Testing**: pytest suite exercising real detection logic against a real database
 
 ## Getting started
 
