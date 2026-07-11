@@ -1,4 +1,4 @@
-from fastapi import FastAPI, Depends, Query
+from fastapi import FastAPI, Depends, Query, HTTPException
 from pydantic import BaseModel
 from sqlalchemy.orm import Session
 from uuid import UUID
@@ -8,6 +8,7 @@ from . import models
 from .parsers import parse_log
 from .detections import run_all_detections, detect_cross_host_correlation
 from .auth import require_api_key
+from .triage import generate_triage
 
 app = FastAPI(title="Custom SIEM")
 
@@ -122,3 +123,44 @@ def trigger_cross_host_detection(db: Session = Depends(get_db)):
     """
     detect_cross_host_correlation(db)
     return {"status": "Cross-host correlation detection run complete"}
+
+
+@app.post("/alerts/{alert_id}/triage", dependencies=[Depends(require_api_key)])
+def triage_alert(alert_id: UUID, db: Session = Depends(get_db)):
+    """
+    LLM-assisted triage: sends the alert plus its related raw log lines to
+    Claude and asks for a plain-English summary, a severity rating, and a
+    recommended next step. Purely advisory — this never takes action on its
+    own, it only writes the summary/severity back onto the alert for a
+    human to read. Triggered on demand rather than automatically on every
+    alert, to keep LLM API usage opt-in and predictable.
+    """
+    alert = db.query(models.Alert).filter(models.Alert.id == alert_id).first()
+    if not alert:
+        raise HTTPException(status_code=404, detail="Alert not found")
+
+    logs_query = db.query(models.RawLog.raw_log)
+    if alert.host_id:
+        logs_query = logs_query.filter(models.RawLog.host_id == alert.host_id)
+    related_logs = [
+        row[0] for row in
+        logs_query.order_by(models.RawLog.received_at.desc()).limit(20).all()
+    ]
+
+    result = generate_triage(alert.alert_type, alert.description, related_logs)
+
+    if result["error"]:
+        raise HTTPException(status_code=502, detail=f"Triage failed: {result['error']}")
+
+    alert.triage_summary = result["summary"]
+    alert.severity = result["severity"]
+    db.commit()
+    db.refresh(alert)
+
+    return {
+        "alert_id": str(alert.id),
+        "alert_type": alert.alert_type,
+        "triage_summary": alert.triage_summary,
+        "severity": alert.severity,
+        "recommended_action": result["recommended_action"],
+    }

@@ -54,6 +54,10 @@ class Alert(Base):
     description = Column(String, nullable=False)
     created_at = Column(DateTime, default=datetime.utcnow)
 
+    # Populated on demand via POST /alerts/{id}/triage — null until triaged
+    triage_summary = Column(Text, nullable=True)
+    severity = Column(String, nullable=True)
+
     __table_args__ = (
         Index("ix_alert_host_description", "host_id", "description"),
     )

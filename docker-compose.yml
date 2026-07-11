@@ -16,6 +16,14 @@ services:
       timeout: 3s
       retries: 10
 
+  ollama:
+    image: ollama/ollama:latest
+    container_name: siem_ollama
+    volumes:
+      - ollama_data:/root/.ollama
+    ports:
+      - "11434:11434"
+
   api:
     build: .
     container_name: siem_api
@@ -26,6 +34,8 @@ services:
       DATABASE_URL: postgresql://${POSTGRES_USER}:${POSTGRES_PASSWORD}@db:5432/${POSTGRES_DB}
       API_KEY: ${API_KEY}
       ALERT_WEBHOOK_URL: ${ALERT_WEBHOOK_URL}
+      OLLAMA_URL: http://ollama:11434
+      OLLAMA_MODEL: ${OLLAMA_MODEL:-llama3.2:1b}
     ports:
       - "8000:8000"
     volumes:
@@ -46,3 +56,4 @@ services:
 
 volumes:
   postgres_data:
+  ollama_data:
