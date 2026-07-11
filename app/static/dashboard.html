@@ -1,0 +1,877 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>SIEM // Signal Room</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500;600&family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
+<script src="https://cdnjs.cloudflare.com/ajax/libs/Chart.js/4.4.0/chart.umd.min.js"></script>
+<style>
+  :root {
+    --bg: #0A0E14;
+    --panel: #10151F;
+    --panel-raised: #141B27;
+    --hairline: #1E2530;
+    --text: #E4E9F0;
+    --muted: #6B7686;
+    --faint: #414C5C;
+    --pulse: #4AFFB0;
+    --critical: #FF4757;
+    --high: #FFA24A;
+    --medium: #FFD666;
+    --low: #6B7686;
+    --mono: 'IBM Plex Mono', monospace;
+    --sans: 'Inter', sans-serif;
+  }
+
+  * { box-sizing: border-box; }
+
+  body {
+    margin: 0;
+    background: var(--bg);
+    color: var(--text);
+    font-family: var(--sans);
+    -webkit-font-smoothing: antialiased;
+  }
+
+  a { color: inherit; }
+
+  /* ---------- Header ---------- */
+  header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: 18px 28px;
+    border-bottom: 1px solid var(--hairline);
+  }
+
+  .brand {
+    display: flex;
+    align-items: baseline;
+    gap: 10px;
+  }
+
+  .brand h1 {
+    font-size: 16px;
+    font-weight: 600;
+    letter-spacing: 0.02em;
+    margin: 0;
+  }
+
+  .brand .slash { color: var(--faint); font-family: var(--mono); }
+
+  .brand .subtitle {
+    font-family: var(--mono);
+    font-size: 11px;
+    color: var(--muted);
+    text-transform: uppercase;
+    letter-spacing: 0.08em;
+  }
+
+  .header-right { display: flex; align-items: center; gap: 16px; }
+
+  .conn-status {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    font-family: var(--mono);
+    font-size: 11px;
+    color: var(--muted);
+    text-transform: uppercase;
+    letter-spacing: 0.06em;
+  }
+
+  .conn-dot {
+    width: 7px;
+    height: 7px;
+    border-radius: 50%;
+    background: var(--faint);
+    transition: background 0.3s;
+  }
+  .conn-dot.live {
+    background: var(--pulse);
+    box-shadow: 0 0 6px var(--pulse);
+    animation: dotpulse 2s ease-in-out infinite;
+  }
+  .conn-dot.error { background: var(--critical); box-shadow: 0 0 6px var(--critical); }
+
+  @keyframes dotpulse {
+    0%, 100% { opacity: 1; }
+    50% { opacity: 0.4; }
+  }
+
+  #apiKeyBtn {
+    font-family: var(--mono);
+    font-size: 11px;
+    background: transparent;
+    border: 1px solid var(--hairline);
+    color: var(--muted);
+    padding: 6px 12px;
+    border-radius: 3px;
+    cursor: pointer;
+    letter-spacing: 0.04em;
+    text-transform: uppercase;
+  }
+  #apiKeyBtn:hover { border-color: var(--faint); color: var(--text); }
+
+  /* ---------- Pulse strip: the signature element ---------- */
+  .pulse-strip-wrap {
+    border-bottom: 1px solid var(--hairline);
+    background: var(--panel);
+    padding: 10px 28px 0;
+  }
+  .pulse-strip-label {
+    font-family: var(--mono);
+    font-size: 10px;
+    color: var(--faint);
+    text-transform: uppercase;
+    letter-spacing: 0.1em;
+    margin-bottom: 4px;
+  }
+  #pulseSvg { width: 100%; height: 56px; display: block; }
+  .pulse-line {
+    fill: none;
+    stroke: var(--hairline);
+    stroke-width: 1;
+  }
+  .pulse-scanline {
+    stroke: var(--pulse);
+    stroke-width: 1;
+    opacity: 0.5;
+  }
+
+  /* ---------- Stats readout row ---------- */
+  .stats-row {
+    display: flex;
+    border-bottom: 1px solid var(--hairline);
+    background: var(--panel);
+  }
+  .stat-item {
+    flex: 1;
+    padding: 18px 28px;
+    border-right: 1px solid var(--hairline);
+  }
+  .stat-item:last-child { border-right: none; }
+  .stat-eyebrow {
+    font-family: var(--mono);
+    font-size: 10px;
+    color: var(--muted);
+    text-transform: uppercase;
+    letter-spacing: 0.1em;
+    margin-bottom: 6px;
+  }
+  .stat-value {
+    font-family: var(--mono);
+    font-size: 28px;
+    font-weight: 500;
+    color: var(--text);
+  }
+  .stat-value.accent { color: var(--pulse); }
+
+  /* ---------- Main grid ---------- */
+  main {
+    display: grid;
+    grid-template-columns: 1fr 340px;
+    gap: 0;
+    border-bottom: 1px solid var(--hairline);
+  }
+
+  .panel-title {
+    font-family: var(--mono);
+    font-size: 11px;
+    color: var(--muted);
+    text-transform: uppercase;
+    letter-spacing: 0.08em;
+    padding: 16px 28px 10px;
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+  }
+
+  .clear-filter {
+    font-family: var(--mono);
+    font-size: 10px;
+    color: var(--pulse);
+    cursor: pointer;
+    text-transform: none;
+    letter-spacing: 0;
+  }
+
+  /* ---------- Alert stream ---------- */
+  .alert-stream {
+    border-right: 1px solid var(--hairline);
+    max-height: 560px;
+    overflow-y: auto;
+  }
+
+  .alert-row {
+    display: flex;
+    gap: 12px;
+    padding: 12px 28px;
+    border-bottom: 1px solid var(--hairline);
+    border-left: 3px solid var(--low);
+    cursor: pointer;
+  }
+  .alert-row:hover { background: var(--panel-raised); }
+  .alert-row.sev-critical { border-left-color: var(--critical); }
+  .alert-row.sev-high { border-left-color: var(--high); }
+  .alert-row.sev-medium { border-left-color: var(--medium); }
+  .alert-row.sev-low { border-left-color: var(--low); }
+
+  .alert-main { flex: 1; min-width: 0; }
+  .alert-type-line {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    font-size: 13px;
+    font-weight: 600;
+  }
+  .sev-chip {
+    font-family: var(--mono);
+    font-size: 9px;
+    text-transform: uppercase;
+    letter-spacing: 0.06em;
+    padding: 1px 6px;
+    border-radius: 2px;
+    color: var(--bg);
+    background: var(--low);
+  }
+  .sev-chip.sev-critical { background: var(--critical); }
+  .sev-chip.sev-high { background: var(--high); }
+  .sev-chip.sev-medium { background: var(--medium); }
+  .sev-chip.sev-low { background: var(--low); color: var(--text); }
+
+  .alert-desc {
+    font-size: 12.5px;
+    color: var(--muted);
+    margin-top: 3px;
+  }
+  .alert-meta {
+    font-family: var(--mono);
+    font-size: 10.5px;
+    color: var(--faint);
+    margin-top: 5px;
+    display: flex;
+    gap: 12px;
+  }
+
+  .alert-detail {
+    padding: 0 28px 14px;
+    border-bottom: 1px solid var(--hairline);
+    background: var(--panel-raised);
+    display: none;
+  }
+  .alert-detail.open { display: block; }
+
+  .triage-btn {
+    font-family: var(--mono);
+    font-size: 11px;
+    background: transparent;
+    border: 1px solid var(--pulse);
+    color: var(--pulse);
+    padding: 6px 14px;
+    border-radius: 3px;
+    cursor: pointer;
+    margin-top: 10px;
+    text-transform: uppercase;
+    letter-spacing: 0.04em;
+  }
+  .triage-btn:hover { background: rgba(74,255,176,0.08); }
+  .triage-btn:disabled { opacity: 0.4; cursor: default; }
+
+  .triage-result {
+    margin-top: 12px;
+    padding: 12px 14px;
+    background: var(--bg);
+    border: 1px solid var(--hairline);
+    border-radius: 4px;
+    font-size: 12.5px;
+    line-height: 1.5;
+  }
+  .triage-result .label {
+    font-family: var(--mono);
+    font-size: 9.5px;
+    color: var(--faint);
+    text-transform: uppercase;
+    letter-spacing: 0.08em;
+    margin-top: 8px;
+  }
+  .triage-result .label:first-child { margin-top: 0; }
+
+  /* ---------- Sidebar ---------- */
+  .side-col { display: flex; flex-direction: column; }
+
+  .host-roster { border-bottom: 1px solid var(--hairline); }
+  .host-row {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    padding: 9px 28px;
+    font-size: 12.5px;
+    cursor: pointer;
+    border-bottom: 1px solid var(--hairline);
+  }
+  .host-row:last-child { border-bottom: none; }
+  .host-row:hover { background: var(--panel-raised); }
+  .host-name { font-weight: 500; }
+  .host-meta {
+    font-family: var(--mono);
+    font-size: 10.5px;
+    color: var(--faint);
+    text-align: right;
+  }
+  .host-status-dot {
+    width: 6px; height: 6px; border-radius: 50%;
+    background: var(--pulse); display: inline-block; margin-right: 6px;
+  }
+
+  .breakdown { padding-bottom: 14px; }
+  .legend-row {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: 6px 28px;
+    font-family: var(--mono);
+    font-size: 10.5px;
+    cursor: pointer;
+  }
+  .legend-row:hover { background: var(--panel-raised); }
+  .legend-swatch {
+    width: 8px; height: 8px; border-radius: 2px;
+    display: inline-block; margin-right: 8px;
+  }
+  .legend-label { color: var(--text); display: flex; align-items: center; }
+  .legend-count { color: var(--muted); }
+
+  /* ---------- Volume chart ---------- */
+  .volume-section { padding: 4px 28px 24px; }
+  #volumeChart { max-height: 180px; }
+
+  .empty-state {
+    padding: 28px;
+    font-family: var(--mono);
+    font-size: 12px;
+    color: var(--faint);
+    text-align: center;
+  }
+
+  /* ---------- API key modal ---------- */
+  .modal-backdrop {
+    position: fixed; inset: 0;
+    background: rgba(10,14,20,0.85);
+    display: flex; align-items: center; justify-content: center;
+    z-index: 10;
+  }
+  .modal-backdrop.hidden { display: none; }
+  .modal {
+    background: var(--panel);
+    border: 1px solid var(--hairline);
+    border-radius: 6px;
+    padding: 24px;
+    width: 340px;
+  }
+  .modal h2 {
+    font-size: 13px;
+    font-family: var(--mono);
+    text-transform: uppercase;
+    letter-spacing: 0.06em;
+    margin: 0 0 6px;
+  }
+  .modal p { font-size: 12.5px; color: var(--muted); margin: 0 0 16px; line-height: 1.5; }
+  .modal input {
+    width: 100%;
+    background: var(--bg);
+    border: 1px solid var(--hairline);
+    color: var(--text);
+    font-family: var(--mono);
+    font-size: 12px;
+    padding: 10px 12px;
+    border-radius: 4px;
+    margin-bottom: 14px;
+  }
+  .modal button {
+    width: 100%;
+    background: var(--pulse);
+    border: none;
+    color: var(--bg);
+    font-family: var(--mono);
+    font-weight: 600;
+    font-size: 12px;
+    padding: 10px;
+    border-radius: 4px;
+    cursor: pointer;
+    text-transform: uppercase;
+    letter-spacing: 0.04em;
+  }
+
+  ::-webkit-scrollbar { width: 8px; }
+  ::-webkit-scrollbar-track { background: var(--panel); }
+  ::-webkit-scrollbar-thumb { background: var(--hairline); border-radius: 4px; }
+
+  @media (max-width: 860px) {
+    main { grid-template-columns: 1fr; }
+    .alert-stream { border-right: none; }
+  }
+</style>
+</head>
+<body>
+
+<header>
+  <div class="brand">
+    <h1>SIEM<span class="slash"> // </span>SIGNAL ROOM</h1>
+  </div>
+  <div class="header-right">
+    <div class="conn-status">
+      <span class="conn-dot" id="connDot"></span>
+      <span id="connLabel">connecting</span>
+    </div>
+    <button id="apiKeyBtn">Set API Key</button>
+  </div>
+</header>
+
+<div class="pulse-strip-wrap">
+  <div class="pulse-strip-label">Alert activity — last hour</div>
+  <svg id="pulseSvg" viewBox="0 0 1000 56" preserveAspectRatio="none"></svg>
+</div>
+
+<div class="stats-row">
+  <div class="stat-item">
+    <div class="stat-eyebrow">Hosts</div>
+    <div class="stat-value" id="statHosts">—</div>
+  </div>
+  <div class="stat-item">
+    <div class="stat-eyebrow">Logs Ingested</div>
+    <div class="stat-value" id="statLogs">—</div>
+  </div>
+  <div class="stat-item">
+    <div class="stat-eyebrow">Total Alerts</div>
+    <div class="stat-value" id="statAlerts">—</div>
+  </div>
+  <div class="stat-item">
+    <div class="stat-eyebrow">Alerts (24h)</div>
+    <div class="stat-value accent" id="stat24h">—</div>
+  </div>
+</div>
+
+<main>
+  <section class="alert-stream">
+    <div class="panel-title">
+      <span>Alert Stream</span>
+      <span class="clear-filter" id="clearFilter" style="display:none">clear filter ×</span>
+    </div>
+    <div id="alertList"></div>
+  </section>
+
+  <aside class="side-col">
+    <div class="host-roster">
+      <div class="panel-title"><span>Hosts</span></div>
+      <div id="hostList"></div>
+    </div>
+    <div class="breakdown">
+      <div class="panel-title"><span>Alerts by Type</span></div>
+      <div style="display:flex; justify-content:center; padding: 4px 28px 8px;">
+        <canvas id="typeChart" style="max-width:220px;"></canvas>
+      </div>
+      <div id="breakdownLegend"></div>
+    </div>
+  </aside>
+</main>
+
+<section class="volume-section">
+  <div class="panel-title" style="padding-left:0"><span>Log Volume — last 6h</span></div>
+  <canvas id="volumeChart"></canvas>
+</section>
+
+<div class="modal-backdrop" id="modalBackdrop">
+  <div class="modal">
+    <h2>API Key Required</h2>
+    <p>Enter the API_KEY from your .env file. It's stored only in this browser's local storage and sent solely to this SIEM's own API.</p>
+    <input type="password" id="apiKeyInput" placeholder="X-API-Key value" />
+    <button id="apiKeySave">Connect</button>
+  </div>
+</div>
+
+<script>
+const SEVERITY_FALLBACK = {
+  "Threat Intel Match": "critical",
+  "Successful Brute Force": "critical",
+  "Cross-Host Brute Force": "high",
+  "Rapid Brute Force": "medium",
+  "Brute Force Attempt": "medium",
+};
+
+let apiKey = localStorage.getItem("siem_api_key") || "";
+let activeFilter = null; // { type: 'host'|'alert_type', value: string }
+let cachedAlerts = [];
+let volumeChart = null;
+let typeChart = null;
+let expandedAlertId = null; // survives re-renders so triage/auto-refresh don't collapse the open panel
+
+const modalBackdrop = document.getElementById("modalBackdrop");
+const connDot = document.getElementById("connDot");
+const connLabel = document.getElementById("connLabel");
+
+document.getElementById("apiKeyBtn").addEventListener("click", () => {
+  document.getElementById("apiKeyInput").value = apiKey;
+  modalBackdrop.classList.remove("hidden");
+});
+document.getElementById("apiKeySave").addEventListener("click", () => {
+  apiKey = document.getElementById("apiKeyInput").value.trim();
+  localStorage.setItem("siem_api_key", apiKey);
+  modalBackdrop.classList.add("hidden");
+  refreshAll();
+});
+document.getElementById("clearFilter").addEventListener("click", () => {
+  activeFilter = null;
+  document.getElementById("clearFilter").style.display = "none";
+  renderAlerts();
+});
+
+if (!apiKey) modalBackdrop.classList.remove("hidden");
+else modalBackdrop.classList.add("hidden");
+
+async function fetchJSON(path) {
+  const res = await fetch(path, { headers: { "X-API-Key": apiKey } });
+  if (!res.ok) throw new Error(`${res.status} on ${path}`);
+  return res.json();
+}
+
+function severityOf(alert) {
+  return (alert.severity || SEVERITY_FALLBACK[alert.alert_type] || "low").toLowerCase();
+}
+
+function parseISO(iso) {
+  // Some columns are timezone-naive (no offset in their ISO string, needs
+  // "Z" appended) and some are timezone-aware (already end in +00:00 or
+  // similar). Blindly appending "Z" to an already-offset string produces
+  // an invalid date string — this checks first.
+  if (!iso) return null;
+  const hasOffset = /[+-]\d\d:\d\d$/.test(iso) || iso.endsWith("Z");
+  return new Date(hasOffset ? iso : iso + "Z");
+}
+
+function relTime(iso) {
+  const d = parseISO(iso);
+  if (!d) return "—";
+  const s = Math.floor((Date.now() - d.getTime()) / 1000);
+  if (s < 60) return `${s}s ago`;
+  if (s < 3600) return `${Math.floor(s / 60)}m ago`;
+  if (s < 86400) return `${Math.floor(s / 3600)}h ago`;
+  return `${Math.floor(s / 86400)}d ago`;
+}
+
+function setConn(state) {
+  connDot.className = "conn-dot " + state;
+  connLabel.textContent = state === "live" ? "live" : state === "error" ? "connection error" : "connecting";
+}
+
+/* ---------- Pulse strip ---------- */
+function renderPulse(alerts) {
+  const svg = document.getElementById("pulseSvg");
+  const now = Date.now();
+  const hourAgo = now - 3600 * 1000;
+  const recent = alerts.filter(a => parseISO(a.created_at).getTime() >= hourAgo);
+
+  let ticks = "";
+  recent.forEach(a => {
+    const t = parseISO(a.created_at).getTime();
+    const x = ((t - hourAgo) / (3600 * 1000)) * 1000;
+    const sev = severityOf(a);
+    const color = { critical: "#FF4757", high: "#FFA24A", medium: "#FFD666", low: "#6B7686" }[sev];
+    const h = { critical: 44, high: 34, medium: 24, low: 14 }[sev];
+    ticks += `<line x1="${x}" y1="${56 - h}" x2="${x}" y2="56" stroke="${color}" stroke-width="2" opacity="0.85" />`;
+  });
+
+  svg.innerHTML = `<line x1="0" y1="55" x2="1000" y2="55" class="pulse-line" />` + ticks;
+}
+
+/* ---------- Stats ---------- */
+function renderStats(s) {
+  document.getElementById("statHosts").textContent = s.total_hosts;
+  document.getElementById("statLogs").textContent = s.total_logs;
+  document.getElementById("statAlerts").textContent = s.total_alerts;
+  document.getElementById("stat24h").textContent = s.alerts_last_24h;
+}
+
+/* ---------- Alert stream ---------- */
+function renderAlerts() {
+  const list = document.getElementById("alertList");
+  let alerts = cachedAlerts;
+
+  if (activeFilter) {
+    alerts = alerts.filter(a => {
+      if (activeFilter.type === "host") return a.host_id === activeFilter.value;
+      if (activeFilter.type === "alert_type") return a.alert_type === activeFilter.value;
+      return true;
+    });
+  }
+
+  if (alerts.length === 0) {
+    list.innerHTML = `<div class="empty-state">No alerts${activeFilter ? " matching this filter" : " yet — ingest some logs to see detections appear here"}.</div>`;
+    return;
+  }
+
+  list.innerHTML = alerts.map(a => {
+    const sev = severityOf(a);
+    return `
+      <div class="alert-row sev-${sev}" data-id="${a.id}">
+        <div class="alert-main">
+          <div class="alert-type-line">
+            <span class="sev-chip sev-${sev}">${sev}</span>
+            <span>${a.alert_type}</span>
+          </div>
+          <div class="alert-desc">${a.description}</div>
+          <div class="alert-meta">
+            <span>${relTime(a.created_at)}</span>
+            <span>${a.host_id ? "host:" + a.host_id.slice(0, 8) : "fleet-wide"}</span>
+          </div>
+        </div>
+      </div>
+      <div class="alert-detail" id="detail-${a.id}"></div>
+    `;
+  }).join("");
+
+  list.querySelectorAll(".alert-row").forEach(row => {
+    row.addEventListener("click", () => toggleDetail(row.dataset.id, alerts.find(a => a.id === row.dataset.id)));
+  });
+
+  // Restore whichever panel was open before this re-render (post-triage
+  // update or periodic auto-refresh) instead of silently collapsing it.
+  if (expandedAlertId) {
+    const stillVisible = alerts.find(a => a.id === expandedAlertId);
+    if (stillVisible) {
+      openDetailPanel(expandedAlertId, stillVisible);
+    } else {
+      expandedAlertId = null;
+    }
+  }
+}
+
+function toggleDetail(id, alert) {
+  if (expandedAlertId === id) {
+    closeAllDetails();
+    expandedAlertId = null;
+    return;
+  }
+  openDetailPanel(id, alert);
+}
+
+function closeAllDetails() {
+  document.querySelectorAll(".alert-detail.open").forEach(d => d.classList.remove("open"));
+}
+
+function openDetailPanel(id, alert) {
+  const detail = document.getElementById("detail-" + id);
+  if (!detail) return;
+  closeAllDetails();
+  expandedAlertId = id;
+
+  if (alert.triage_summary) {
+    detail.innerHTML = renderTriageBlock(alert);
+  } else {
+    detail.innerHTML = `<button class="triage-btn" id="triage-btn-${id}">Run AI Triage</button>`;
+    detail.querySelector("button").addEventListener("click", async (e) => {
+      e.stopPropagation();
+      const btn = document.getElementById(`triage-btn-${id}`);
+      btn.disabled = true;
+      btn.textContent = "Analyzing…";
+      try {
+        const result = await fetch(`/alerts/${id}/triage`, {
+          method: "POST",
+          headers: { "X-API-Key": apiKey },
+        }).then(r => {
+          if (!r.ok) throw new Error("triage failed");
+          return r.json();
+        });
+        alert.severity = result.severity;
+        alert.triage_summary = result.triage_summary;
+        alert.recommended_action = result.recommended_action;
+        // expandedAlertId is already set, so this re-render restores the
+        // panel in its open state with the new triage content, instead
+        // of collapsing back to a closed row.
+        renderAlerts();
+      } catch (err) {
+        btn.disabled = false;
+        btn.textContent = "Triage failed — retry";
+      }
+    });
+  }
+  detail.classList.add("open");
+}
+
+function renderTriageBlock(alert) {
+  return `
+    <div class="triage-result">
+      <div class="label">Summary</div>
+      <div>${alert.triage_summary}</div>
+      <div class="label">Recommended Action</div>
+      <div>${alert.recommended_action || "—"}</div>
+    </div>
+  `;
+}
+
+/* ---------- Host roster ---------- */
+function renderHosts(hosts) {
+  const list = document.getElementById("hostList");
+  if (hosts.length === 0) {
+    list.innerHTML = `<div class="empty-state">No hosts registered</div>`;
+    return;
+  }
+  list.innerHTML = hosts.map(h => `
+    <div class="host-row" data-id="${h.id}">
+      <div><span class="host-status-dot"></span><span class="host-name">${h.hostname}</span></div>
+      <div class="host-meta">${h.log_count} logs<br>${relTime(h.last_seen)}</div>
+    </div>
+  `).join("");
+
+  list.querySelectorAll(".host-row").forEach(row => {
+    row.addEventListener("click", () => {
+      activeFilter = { type: "host", value: row.dataset.id };
+      document.getElementById("clearFilter").style.display = "inline";
+      renderAlerts();
+    });
+  });
+}
+
+/* ---------- Breakdown: doughnut chart, colored by severity ---------- */
+const SEV_COLOR = { critical: "#FF4757", high: "#FFA24A", medium: "#FFD666", low: "#6B7686" };
+
+function renderBreakdown(rows) {
+  const canvas = document.getElementById("typeChart");
+  const legend = document.getElementById("breakdownLegend");
+
+  if (rows.length === 0) {
+    legend.innerHTML = `<div class="empty-state">No alerts yet</div>`;
+    if (typeChart) { typeChart.destroy(); typeChart = null; }
+    return;
+  }
+
+  const labels = rows.map(r => r.alert_type);
+  const data = rows.map(r => r.count);
+  const colors = rows.map(r => SEV_COLOR[SEVERITY_FALLBACK[r.alert_type] || "low"]);
+
+  if (typeChart) {
+    typeChart.data.labels = labels;
+    typeChart.data.datasets[0].data = data;
+    typeChart.data.datasets[0].backgroundColor = colors;
+    typeChart.update();
+  } else {
+    typeChart = new Chart(canvas, {
+      type: "doughnut",
+      data: {
+        labels,
+        datasets: [{
+          data,
+          backgroundColor: colors,
+          borderColor: "#10151F",
+          borderWidth: 2,
+        }],
+      },
+      options: {
+        responsive: true,
+        maintainAspectRatio: true,
+        aspectRatio: 1,
+        cutout: "62%",
+        plugins: { legend: { display: false } },
+        onClick: (evt, elements) => {
+          if (!elements.length) return;
+          const idx = elements[0].index;
+          activeFilter = { type: "alert_type", value: labels[idx] };
+          document.getElementById("clearFilter").style.display = "inline";
+          renderAlerts();
+        },
+        onHover: (evt, elements) => {
+          canvas.style.cursor = elements.length ? "pointer" : "default";
+        },
+      },
+    });
+  }
+
+  legend.innerHTML = rows.map((r, i) => `
+    <div class="legend-row" data-type="${r.alert_type}">
+      <span class="legend-label"><span class="legend-swatch" style="background:${colors[i]}"></span>${r.alert_type}</span>
+      <span class="legend-count">${r.count}</span>
+    </div>
+  `).join("");
+
+  legend.querySelectorAll(".legend-row").forEach(row => {
+    row.addEventListener("click", () => {
+      activeFilter = { type: "alert_type", value: row.dataset.type };
+      document.getElementById("clearFilter").style.display = "inline";
+      renderAlerts();
+    });
+  });
+}
+
+/* ---------- Volume chart ---------- */
+function renderVolume(rows) {
+  const ctx = document.getElementById("volumeChart");
+  const labels = rows.map(r => parseISO(r.bucket).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" }));
+  const data = rows.map(r => r.count);
+
+  if (volumeChart) {
+    volumeChart.data.labels = labels;
+    volumeChart.data.datasets[0].data = data;
+    volumeChart.update();
+    return;
+  }
+
+  volumeChart = new Chart(ctx, {
+    type: "line",
+    data: {
+      labels,
+      datasets: [{
+        data,
+        borderColor: "#4AFFB0",
+        backgroundColor: "rgba(74,255,176,0.08)",
+        fill: true,
+        tension: 0.3,
+        pointRadius: 0,
+        borderWidth: 1.5,
+      }],
+    },
+    options: {
+      responsive: true,
+      maintainAspectRatio: false,
+      plugins: { legend: { display: false } },
+      scales: {
+        x: { grid: { color: "#1E2530" }, ticks: { color: "#6B7686", font: { family: "IBM Plex Mono", size: 10 }, maxTicksLimit: 8 } },
+        y: { grid: { color: "#1E2530" }, ticks: { color: "#6B7686", font: { family: "IBM Plex Mono", size: 10 } }, beginAtZero: true },
+      },
+    },
+  });
+  ctx.parentElement.style.height = "180px";
+}
+
+/* ---------- Main refresh loop ---------- */
+async function refreshAll() {
+  if (!apiKey) return;
+  try {
+    const [summary, alerts, breakdown, hosts, volume] = await Promise.all([
+      fetchJSON("/stats/summary"),
+      fetchJSON("/alerts?limit=100"),
+      fetchJSON("/stats/alerts-by-type"),
+      fetchJSON("/stats/hosts-overview"),
+      fetchJSON("/stats/log-volume?hours=6"),
+    ]);
+    cachedAlerts = alerts;
+    renderStats(summary);
+    renderAlerts();
+    renderPulse(alerts);
+    renderBreakdown(breakdown);
+    renderHosts(hosts);
+    renderVolume(volume);
+    setConn("live");
+  } catch (err) {
+    setConn("error");
+    console.error(err);
+  }
+}
+
+refreshAll();
+setInterval(refreshAll, 10000); // matches the detection worker's poll interval
+</script>
+
+</body>
+</html>

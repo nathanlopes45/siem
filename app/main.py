@@ -1,8 +1,12 @@
 from fastapi import FastAPI, Depends, Query, HTTPException
+from fastapi.responses import FileResponse
 from pydantic import BaseModel
+from sqlalchemy import func, text
 from sqlalchemy.orm import Session
 from uuid import UUID
 from typing import Optional
+from datetime import datetime, timedelta
+import os
 from .database import engine, get_db
 from . import models
 from .parsers import parse_log
@@ -13,6 +17,8 @@ from .triage import generate_triage
 app = FastAPI(title="Custom SIEM")
 
 models.Base.metadata.create_all(bind=engine)
+
+STATIC_DIR = os.path.join(os.path.dirname(__file__), "static")
 
 
 class LogIngest(BaseModel):
@@ -99,8 +105,13 @@ def get_logs(
 
 
 @app.get("/alerts", dependencies=[Depends(require_api_key)])
-def get_alerts(db: Session = Depends(get_db)):
-    return db.query(models.Alert).order_by(models.Alert.created_at.desc()).all()
+def get_alerts(limit: Optional[int] = Query(100), db: Session = Depends(get_db)):
+    return (
+        db.query(models.Alert)
+        .order_by(models.Alert.created_at.desc())
+        .limit(limit)
+        .all()
+    )
 
 
 @app.post("/detect/{host_id}", dependencies=[Depends(require_api_key)])
@@ -164,3 +175,88 @@ def triage_alert(alert_id: UUID, db: Session = Depends(get_db)):
         "severity": alert.severity,
         "recommended_action": result["recommended_action"],
     }
+
+
+@app.get("/dashboard")
+def dashboard():
+    """
+    Serves the static dashboard shell. Unauthenticated on purpose — it's
+    just HTML/CSS/JS with no data baked in. Every actual data request the
+    page makes goes through the normal authenticated JSON endpoints below,
+    with the API key entered client-side and never sent anywhere but this
+    API.
+    """
+    return FileResponse(os.path.join(STATIC_DIR, "dashboard.html"))
+
+
+@app.get("/stats/summary", dependencies=[Depends(require_api_key)])
+def stats_summary(db: Session = Depends(get_db)):
+    since_24h = datetime.utcnow() - timedelta(hours=24)
+    return {
+        "total_hosts": db.query(func.count(models.Host.id)).scalar(),
+        "total_logs": db.query(func.count(models.RawLog.id)).scalar(),
+        "total_alerts": db.query(func.count(models.Alert.id)).scalar(),
+        "alerts_last_24h": (
+            db.query(func.count(models.Alert.id))
+            .filter(models.Alert.created_at >= since_24h)
+            .scalar()
+        ),
+    }
+
+
+@app.get("/stats/alerts-by-type", dependencies=[Depends(require_api_key)])
+def stats_alerts_by_type(db: Session = Depends(get_db)):
+    results = (
+        db.query(models.Alert.alert_type, func.count().label("count"))
+        .group_by(models.Alert.alert_type)
+        .order_by(func.count().desc())
+        .all()
+    )
+    return [{"alert_type": t, "count": c} for t, c in results]
+
+
+@app.get("/stats/log-volume", dependencies=[Depends(require_api_key)])
+def stats_log_volume(hours: int = Query(6, ge=1, le=168), db: Session = Depends(get_db)):
+    """
+    Buckets log ingestion into 10-minute windows over the requested lookback
+    period, using Postgres's date_bin (14+) so the bucketing happens in the
+    database rather than in a Python loop — same principle as the detection
+    engine's aggregation queries.
+    """
+    since = datetime.utcnow() - timedelta(hours=hours)
+    bucket = func.date_bin(
+        text("'10 minutes'"), models.RawLog.received_at, text("TIMESTAMP '2000-01-01'")
+    )
+    results = (
+        db.query(bucket.label("bucket"), func.count().label("count"))
+        .filter(models.RawLog.received_at >= since)
+        .group_by(text("bucket"))
+        .order_by(text("bucket"))
+        .all()
+    )
+    return [{"bucket": b.isoformat(), "count": c} for b, c in results]
+
+
+@app.get("/stats/hosts-overview", dependencies=[Depends(require_api_key)])
+def stats_hosts_overview(db: Session = Depends(get_db)):
+    results = (
+        db.query(
+            models.Host.id,
+            models.Host.hostname,
+            func.count(models.RawLog.id).label("log_count"),
+            func.max(models.RawLog.received_at).label("last_seen"),
+        )
+        .outerjoin(models.RawLog, models.RawLog.host_id == models.Host.id)
+        .group_by(models.Host.id)
+        .order_by(models.Host.hostname)
+        .all()
+    )
+    return [
+        {
+            "id": str(host_id),
+            "hostname": hostname,
+            "log_count": log_count,
+            "last_seen": last_seen.isoformat() if last_seen else None,
+        }
+        for host_id, hostname, log_count, last_seen in results
+    ]

@@ -174,6 +174,10 @@ docker compose exec api pytest -v
 
 Each test creates its own schema, runs, then drops it — tests don't interfere with each other or with your dev data in `siem_db`.
 
+## Dashboard
+
+A live signal dashboard at `http://localhost:8000/dashboard` — alert stream with click-to-expand AI triage, a live pulse strip synced to the worker's 10-second poll cycle, per-host activity, alert-type breakdown, and a log volume chart. On first load it asks for your API key (stored only in your browser's local storage, sent only to this API) — no separate login system needed.
+
 ## Roadmap
 
 - [x] Real log parsing (structured `event_type`/`username`/`src_port` fields instead of a single regex-extracted IP)
@@ -183,7 +187,7 @@ Each test creates its own schema, runs, then drops it — tests don't interfere 
 - [x] Alerting integrations (Slack/webhook notifications on new alerts)
 - [x] LLM-assisted alert triage: natural-language incident summaries and severity suggestions generated from raw log context
 - [x] Automated test suite for detection logic
-- [ ] Dashboard for visualizing alerts and log volume over time
+- [x] Dashboard for visualizing alerts and log volume over time
 - [ ] Support additional log source formats beyond SSH (e.g. web server access logs)
 
 ## License
