@@ -145,6 +145,22 @@ New alerts (not duplicates — only genuinely new findings) trigger a webhook PO
 - `detect-secrets` baseline scan integrated to catch accidental credential leaks before they're pushed
 - Database connection retry/healthcheck logic to avoid race conditions on container startup
 
+## Running the tests
+
+Tests exercise the real detection logic against a real (throwaway) Postgres database — not mocks — since the whole point of these detectors is correct SQL aggregation behavior.
+
+One-time setup: create the test database inside the running Postgres container:
+```bash
+docker compose exec db createdb -U ${POSTGRES_USER:-siem_user} siem_test_db
+```
+
+Run the full suite:
+```bash
+docker compose exec api pytest -v
+```
+
+Each test creates its own schema, runs, then drops it — tests don't interfere with each other or with your dev data in `siem_db`.
+
 ## Roadmap
 
 - [x] Real log parsing (structured `event_type`/`username`/`src_port` fields instead of a single regex-extracted IP)
@@ -153,8 +169,8 @@ New alerts (not duplicates — only genuinely new findings) trigger a webhook PO
 - [x] Cross-host correlation (same attacker IP hitting multiple hosts — lateral movement / credential stuffing signal)
 - [x] Alerting integrations (Slack/webhook notifications on new alerts)
 - [x] LLM-assisted alert triage: natural-language incident summaries and severity suggestions generated from raw log context
+- [x] Automated test suite for detection logic
 - [ ] Dashboard for visualizing alerts and log volume over time
-- [ ] Automated test suite for detection logic
 - [ ] Support additional log source formats beyond SSH (e.g. web server access logs)
 
 ## License

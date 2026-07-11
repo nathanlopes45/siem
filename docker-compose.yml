@@ -40,6 +40,8 @@ services:
       - "8000:8000"
     volumes:
       - ./app:/app/app
+      - ./tests:/app/tests
+      - ./pytest.ini:/app/pytest.ini
 
   worker:
     build: .
