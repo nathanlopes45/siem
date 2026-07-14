@@ -165,6 +165,7 @@ def triage_alert(alert_id: UUID, db: Session = Depends(get_db)):
 
     alert.triage_summary = result["summary"]
     alert.severity = result["severity"]
+    alert.recommended_action = result["recommended_action"]
     db.commit()
     db.refresh(alert)
 
@@ -173,7 +174,7 @@ def triage_alert(alert_id: UUID, db: Session = Depends(get_db)):
         "alert_type": alert.alert_type,
         "triage_summary": alert.triage_summary,
         "severity": alert.severity,
-        "recommended_action": result["recommended_action"],
+        "recommended_action": alert.recommended_action,
     }
 
 
