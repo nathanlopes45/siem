@@ -515,7 +515,7 @@
       <div id="hostList"></div>
     </div>
     <div class="breakdown">
-      <div class="panel-title"><span>Alerts by Type</span></div>
+      <div class="panel-title"><span>Alerts by Severity</span></div>
       <div style="display:flex; justify-content:center; padding: 4px 28px 8px;">
         <canvas id="typeChart" style="max-width:220px;"></canvas>
       </div>
@@ -655,6 +655,7 @@ function renderAlerts() {
     alerts = alerts.filter(a => {
       if (activeFilter.type === "host") return a.host_id === activeFilter.value;
       if (activeFilter.type === "alert_type") return a.alert_type === activeFilter.value;
+      if (activeFilter.type === "severity") return severityOf(a) === activeFilter.value;
       return true;
     });
   }
@@ -803,6 +804,7 @@ async function startTriage(id) {
       current.recommended_action = result.recommended_action;
     }
     renderAlerts();
+    renderBreakdown(cachedAlerts); // reflect the new confirmed severity immediately
   } catch (err) {
     delete triageInFlight[id];
     const detailEl = document.getElementById("detail-" + id);
@@ -850,22 +852,31 @@ function renderHosts(hosts) {
   });
 }
 
-/* ---------- Breakdown: doughnut chart, colored by severity ---------- */
+/* ---------- Breakdown: doughnut chart of REAL severity distribution ---------- */
 const SEV_COLOR = { critical: "#FF4757", high: "#FFA24A", medium: "#FFD666", low: "#6B7686" };
+const SEV_ORDER = ["critical", "high", "medium", "low"];
 
-function renderBreakdown(rows) {
+function renderBreakdown(alerts) {
   const canvas = document.getElementById("typeChart");
   const legend = document.getElementById("breakdownLegend");
 
-  if (rows.length === 0) {
+  if (alerts.length === 0) {
     legend.innerHTML = `<div class="empty-state">No alerts yet</div>`;
     if (typeChart) { typeChart.destroy(); typeChart = null; }
     return;
   }
 
-  const labels = rows.map(r => r.alert_type);
-  const data = rows.map(r => r.count);
-  const colors = rows.map(r => SEV_COLOR[SEVERITY_FALLBACK[r.alert_type] || "low"]);
+  // Computed live from the actual alert objects — each one's severity()
+  // uses the real, AI-confirmed severity if triage has run, or the
+  // heuristic estimate otherwise. This is why triaging an alert now
+  // immediately updates this chart instead of it staying frozen on a
+  // type-only distribution that never reflects triage results.
+  const counts = { critical: 0, high: 0, medium: 0, low: 0 };
+  alerts.forEach(a => { counts[severityOf(a)] += 1; });
+
+  const labels = SEV_ORDER.filter(k => counts[k] > 0);
+  const data = labels.map(k => counts[k]);
+  const colors = labels.map(k => SEV_COLOR[k]);
 
   if (typeChart) {
     typeChart.data.labels = labels;
@@ -889,11 +900,19 @@ function renderBreakdown(rows) {
         maintainAspectRatio: true,
         aspectRatio: 1,
         cutout: "62%",
-        plugins: { legend: { display: false } },
+        plugins: {
+          legend: { display: false },
+          tooltip: {
+            backgroundColor: "#10151F", titleColor: "#E4E9F0", bodyColor: "#E4E9F0",
+            borderColor: "#1E2530", borderWidth: 1,
+            titleFont: { family: "IBM Plex Mono", size: 11 },
+            bodyFont: { family: "IBM Plex Mono", size: 11 },
+          },
+        },
         onClick: (evt, elements) => {
           if (!elements.length) return;
           const idx = elements[0].index;
-          activeFilter = { type: "alert_type", value: labels[idx] };
+          activeFilter = { type: "severity", value: labels[idx] };
           document.getElementById("clearFilter").style.display = "inline";
           renderAlerts();
         },
@@ -904,16 +923,16 @@ function renderBreakdown(rows) {
     });
   }
 
-  legend.innerHTML = rows.map((r, i) => `
-    <div class="legend-row" data-type="${r.alert_type}">
-      <span class="legend-label"><span class="legend-swatch" style="background:${colors[i]}"></span>${r.alert_type}</span>
-      <span class="legend-count">${r.count}</span>
+  legend.innerHTML = labels.map((sev, i) => `
+    <div class="legend-row" data-severity="${sev}">
+      <span class="legend-label"><span class="legend-swatch" style="background:${colors[i]}"></span>${sev}</span>
+      <span class="legend-count">${data[i]}</span>
     </div>
   `).join("");
 
   legend.querySelectorAll(".legend-row").forEach(row => {
     row.addEventListener("click", () => {
-      activeFilter = { type: "alert_type", value: row.dataset.type };
+      activeFilter = { type: "severity", value: row.dataset.severity };
       document.getElementById("clearFilter").style.display = "inline";
       renderAlerts();
     });
@@ -998,10 +1017,9 @@ function renderVolume(rows) {
 async function refreshAll() {
   if (!apiKey) return;
   try {
-    const [summary, alerts, breakdown, hosts, volume] = await Promise.all([
+    const [summary, alerts, hosts, volume] = await Promise.all([
       fetchJSON("/stats/summary"),
       fetchJSON("/alerts?limit=100"),
-      fetchJSON("/stats/alerts-by-type"),
       fetchJSON("/stats/hosts-overview"),
       fetchJSON("/stats/log-volume?hours=6"),
     ]);
@@ -1009,7 +1027,7 @@ async function refreshAll() {
     renderStats(summary);
     renderAlerts();
     renderPulse(alerts);
-    renderBreakdown(breakdown);
+    renderBreakdown(cachedAlerts); // live severity distribution, not a stale type-only query
     renderHosts(hosts);
     renderVolume(volume);
     setConn("live");
