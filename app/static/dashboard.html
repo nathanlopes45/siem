@@ -236,11 +236,25 @@
     border-radius: 2px;
     color: var(--bg);
     background: var(--low);
+    border: 1px solid transparent;
   }
   .sev-chip.sev-critical { background: var(--critical); }
   .sev-chip.sev-high { background: var(--high); }
   .sev-chip.sev-medium { background: var(--medium); }
   .sev-chip.sev-low { background: var(--low); color: var(--text); }
+
+  /* Estimated = heuristic guess from alert type, before AI triage has run.
+     Outlined/dashed instead of filled, so it reads as "unconfirmed" rather
+     than a solid assessment — avoids the confusing appearance of severity
+     "changing" when triage later gives a real, possibly different rating. */
+  .sev-chip.estimated {
+    background: transparent;
+    border: 1px dashed currentColor;
+  }
+  .sev-chip.sev-critical.estimated { color: var(--critical); }
+  .sev-chip.sev-high.estimated { color: var(--high); }
+  .sev-chip.sev-medium.estimated { color: var(--medium); }
+  .sev-chip.sev-low.estimated { color: var(--low); }
 
   .alert-desc {
     font-size: 12.5px;
@@ -431,9 +445,15 @@
     letter-spacing: 0.04em;
   }
 
-  ::-webkit-scrollbar { width: 8px; }
+  * { scrollbar-width: thin; scrollbar-color: var(--faint) var(--panel); }
+  ::-webkit-scrollbar { width: 10px; height: 10px; }
   ::-webkit-scrollbar-track { background: var(--panel); }
-  ::-webkit-scrollbar-thumb { background: var(--hairline); border-radius: 4px; }
+  ::-webkit-scrollbar-thumb {
+    background: var(--faint);
+    border-radius: 5px;
+    border: 2px solid var(--panel);
+  }
+  ::-webkit-scrollbar-thumb:hover { background: var(--pulse); }
 
   @media (max-width: 860px) {
     main { grid-template-columns: 1fr; }
@@ -567,6 +587,12 @@ function severityOf(alert) {
   return (alert.severity || SEVERITY_FALLBACK[alert.alert_type] || "low").toLowerCase();
 }
 
+function isEstimatedSeverity(alert) {
+  // true = we're showing a heuristic guess based on alert type, not a real
+  // AI assessment yet (alert.severity is only set once triage has run)
+  return !alert.severity;
+}
+
 function parseISO(iso) {
   // Some columns are timezone-naive (no offset in their ISO string, needs
   // "Z" appended) and some are timezone-aware (already end in +00:00 or
@@ -640,11 +666,16 @@ function renderAlerts() {
 
   list.innerHTML = alerts.map(a => {
     const sev = severityOf(a);
+    const estimated = isEstimatedSeverity(a);
+    const chipLabel = estimated ? `~${sev}` : sev;
+    const chipTitle = estimated
+      ? "Estimated from alert type — run AI triage for a confirmed assessment"
+      : "Confirmed by AI triage";
     return `
       <div class="alert-row sev-${sev}" data-id="${a.id}">
         <div class="alert-main">
           <div class="alert-type-line">
-            <span class="sev-chip sev-${sev}">${sev}</span>
+            <span class="sev-chip sev-${sev}${estimated ? " estimated" : ""}" title="${chipTitle}">${chipLabel}</span>
             <span>${a.alert_type}</span>
           </div>
           <div class="alert-desc">${a.description}</div>
@@ -664,11 +695,13 @@ function renderAlerts() {
 
   // Restore whichever panel was open before this re-render (post-triage
   // update or periodic auto-refresh) instead of silently collapsing it.
+  // shouldScroll=false here — this is a passive restore, not a fresh user
+  // click, so the page shouldn't jump.
   if (expandedAlertId) {
     const stillVisible = alerts.find(a => a.id === expandedAlertId);
     if (stillVisible) {
-      openDetailPanel(expandedAlertId, stillVisible);
-    } else {
+      openDetailPanel(expandedAlertId, stillVisible, false);
+    } else if (!triageInFlight[expandedAlertId]) {
       expandedAlertId = null;
     }
   }
@@ -680,44 +713,73 @@ function toggleDetail(id, alert) {
     expandedAlertId = null;
     return;
   }
-  openDetailPanel(id, alert);
+  openDetailPanel(id, alert, true);
 }
 
 function closeAllDetails() {
   document.querySelectorAll(".alert-detail.open").forEach(d => d.classList.remove("open"));
 }
 
-function openDetailPanel(id, alert) {
+function openDetailPanel(id, alert, shouldScroll) {
   const detail = document.getElementById("detail-" + id);
   if (!detail) return;
   closeAllDetails();
   expandedAlertId = id;
+  renderDetailForAlert(id, alert);
+  detail.classList.add("open");
+  if (shouldScroll) {
+    detail.scrollIntoView({ behavior: "smooth", block: "nearest" });
+  }
+}
 
-  if (alert.triage_summary) {
+/* ---------- Triage: in-flight state survives auto-refresh re-renders ---------- */
+let triageInFlight = {};   // alertId -> startedAt timestamp
+let elapsedTickInterval = null;
+
+function renderDetailForAlert(id, alert) {
+  const detail = document.getElementById("detail-" + id);
+  if (!detail) return;
+
+  if (triageInFlight[id]) {
+    renderLoadingState(id, detail, triageInFlight[id]);
+  } else if (alert.triage_summary) {
     detail.innerHTML = renderTriageBlock(alert);
   } else {
     detail.innerHTML = `<button class="triage-btn" id="triage-btn-${id}">Run AI Triage</button>`;
     detail.querySelector("button").addEventListener("click", (e) => {
       e.stopPropagation();
-      runTriage(id, alert, detail);
+      startTriage(id);
     });
   }
-  detail.classList.add("open");
 }
 
-async function runTriage(id, alert, detail) {
-  const startedAt = Date.now();
+function renderLoadingState(id, detail, startedAt) {
   detail.innerHTML = `
     <div class="triage-loading">
       <span class="triage-spinner"></span>
-      <span>Running local model analysis<span id="triage-elapsed-${id}">…</span></span>
+      <span>Running local model analysis<span id="triage-elapsed-${id}"></span></span>
     </div>
   `;
+  updateElapsed(id, startedAt);
+  if (elapsedTickInterval) clearInterval(elapsedTickInterval);
+  elapsedTickInterval = setInterval(() => updateElapsed(id, startedAt), 1000);
+}
 
-  const elapsedEl = document.getElementById(`triage-elapsed-${id}`);
-  const tick = setInterval(() => {
-    if (elapsedEl) elapsedEl.textContent = ` — ${Math.floor((Date.now() - startedAt) / 1000)}s`;
-  }, 1000);
+function updateElapsed(id, startedAt) {
+  const el = document.getElementById(`triage-elapsed-${id}`);
+  if (!el) {
+    // the element this timer was updating is gone (panel closed/rebuilt
+    // without this id) — stop ticking instead of running forever
+    if (elapsedTickInterval) { clearInterval(elapsedTickInterval); elapsedTickInterval = null; }
+    return;
+  }
+  el.textContent = ` — ${Math.floor((Date.now() - startedAt) / 1000)}s`;
+}
+
+async function startTriage(id) {
+  triageInFlight[id] = Date.now();
+  const detail = document.getElementById("detail-" + id);
+  if (detail) renderLoadingState(id, detail, triageInFlight[id]);
 
   try {
     const result = await fetch(`/alerts/${id}/triage`, {
@@ -727,21 +789,30 @@ async function runTriage(id, alert, detail) {
       if (!r.ok) throw new Error("triage failed");
       return r.json();
     });
-    alert.severity = result.severity;
-    alert.triage_summary = result.triage_summary;
-    alert.recommended_action = result.recommended_action;
-    // expandedAlertId is already set, so this re-render restores the
-    // panel in its open state with the new triage content, instead
-    // of collapsing back to a closed row.
+
+    delete triageInFlight[id];
+
+    // Always mutate whatever the CURRENT alert object is for this id —
+    // cachedAlerts may have been fully replaced by an auto-refresh while
+    // this request was in flight, so a captured reference from click-time
+    // could be stale/orphaned by now.
+    const current = cachedAlerts.find(a => a.id === id);
+    if (current) {
+      current.severity = result.severity;
+      current.triage_summary = result.triage_summary;
+      current.recommended_action = result.recommended_action;
+    }
     renderAlerts();
   } catch (err) {
-    detail.innerHTML = `<button class="triage-btn" id="triage-btn-${id}">Triage failed — retry</button>`;
-    detail.querySelector("button").addEventListener("click", (e) => {
-      e.stopPropagation();
-      runTriage(id, alert, detail);
-    });
-  } finally {
-    clearInterval(tick);
+    delete triageInFlight[id];
+    const detailEl = document.getElementById("detail-" + id);
+    if (detailEl) {
+      detailEl.innerHTML = `<button class="triage-btn" id="triage-btn-${id}">Triage failed — retry</button>`;
+      detailEl.querySelector("button").addEventListener("click", (e) => {
+        e.stopPropagation();
+        startTriage(id);
+      });
+    }
   }
 }
 
@@ -862,27 +933,61 @@ function renderVolume(rows) {
     return;
   }
 
+  // Bar chart, not a smoothed line — each bar is one real 10-minute bucket
+  // from the API. A curved line can visually imply values *between*
+  // buckets that don't exist; bars are a literal, unambiguous read.
   volumeChart = new Chart(ctx, {
-    type: "line",
+    type: "bar",
     data: {
       labels,
       datasets: [{
+        label: "Logs ingested",
         data,
+        backgroundColor: "rgba(74,255,176,0.35)",
         borderColor: "#4AFFB0",
-        backgroundColor: "rgba(74,255,176,0.08)",
-        fill: true,
-        tension: 0.3,
-        pointRadius: 0,
-        borderWidth: 1.5,
+        borderWidth: 1,
+        borderRadius: 2,
+        maxBarThickness: 20,
       }],
     },
     options: {
       responsive: true,
       maintainAspectRatio: false,
-      plugins: { legend: { display: false } },
+      plugins: {
+        legend: { display: false },
+        tooltip: {
+          backgroundColor: "#10151F",
+          titleColor: "#E4E9F0",
+          bodyColor: "#E4E9F0",
+          borderColor: "#1E2530",
+          borderWidth: 1,
+          padding: 10,
+          titleFont: { family: "IBM Plex Mono", size: 11 },
+          bodyFont: { family: "IBM Plex Mono", size: 11 },
+          callbacks: {
+            title: (items) => `Window starting ${items[0].label}`,
+            label: (item) => `${item.parsed.y} log${item.parsed.y === 1 ? "" : "s"} ingested`,
+          },
+        },
+      },
       scales: {
-        x: { grid: { color: "#1E2530" }, ticks: { color: "#6B7686", font: { family: "IBM Plex Mono", size: 10 }, maxTicksLimit: 8 } },
-        y: { grid: { color: "#1E2530" }, ticks: { color: "#6B7686", font: { family: "IBM Plex Mono", size: 10 } }, beginAtZero: true },
+        x: {
+          title: {
+            display: true, text: "Time (10-minute buckets)",
+            color: "#6B7686", font: { family: "IBM Plex Mono", size: 10 },
+          },
+          grid: { color: "#1E2530" },
+          ticks: { color: "#6B7686", font: { family: "IBM Plex Mono", size: 10 }, maxTicksLimit: 8 },
+        },
+        y: {
+          title: {
+            display: true, text: "Log count",
+            color: "#6B7686", font: { family: "IBM Plex Mono", size: 10 },
+          },
+          grid: { color: "#1E2530" },
+          ticks: { color: "#6B7686", font: { family: "IBM Plex Mono", size: 10 }, precision: 0 },
+          beginAtZero: true,
+        },
       },
     },
   });
