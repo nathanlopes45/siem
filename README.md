@@ -162,7 +162,7 @@ New alerts (not duplicates — only genuinely new findings) trigger a webhook PO
 
 Tests exercise the real detection logic against a real (throwaway) Postgres database — not mocks — since the whole point of these detectors is correct SQL aggregation behavior.
 
-One-time setup: create the test database inside the running Postgres container:
+The test database (`siem_test_db`) is created automatically alongside the main database via a Postgres init script (`db-init/01-create-test-db.sql`) — no manual setup needed on a fresh `docker compose up`. This only runs on a brand-new volume, so if you already have an existing `postgres_data` volume from before this was added, create it once manually:
 ```bash
 docker compose exec db createdb -U ${POSTGRES_USER:-siem_user} siem_test_db
 ```
@@ -176,7 +176,7 @@ Each test creates its own schema, runs, then drops it — tests don't interfere 
 
 ## Dashboard
 
-A live signal dashboard at `http://localhost:8000/dashboard` — alert stream with click-to-expand AI triage, a live pulse strip synced to the worker's 10-second poll cycle, per-host activity, alert-type breakdown, and a log volume chart. On first load it asks for your API key (stored only in your browser's local storage, sent only to this API) — no separate login system needed.
+A live signal dashboard at `http://localhost:8000/dashboard` — alert stream with click-to-expand AI triage, a live pulse strip synced to the worker's 10-second poll cycle, per-host activity, a severity-colored doughnut chart of alerts by type, and a log volume chart. On first load it asks for your API key (stored only in your browser's local storage, sent only to this API) — no separate login system needed.
 
 ## Roadmap
 
