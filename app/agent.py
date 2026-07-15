@@ -115,6 +115,7 @@ Thought: <your final reasoning>
 Final Answer: <a single-line JSON object with keys: summary (2-3 sentences), severity (one of: low, medium, high, critical), recommended_action (one short concrete step), key_evidence (a list of short strings)>
 
 Rules:
+- Respond with EXACTLY ONE Thought/Action pair OR ONE Thought/Final Answer per response. Never write more than one Action, and never write an Action and a Final Answer in the same response — stop immediately after your single Action so you can see its real result before deciding what to do next.
 - Only call a tool when it would genuinely change your conclusion. Do not call more than 4 tools total.
 - Base every conclusion strictly on the alert data and tool outputs you actually received — never invent hosts, IPs, users, or events.
 - Never suggest or imply taking any destructive action (blocking, banning, deleting) — you are investigation-only. recommended_action should describe what a human analyst should look into or do next.
@@ -227,6 +228,30 @@ def _parse_final_answer(reply: str) -> Optional[dict]:
     return None
 
 
+def _first_marker(reply: str) -> str:
+    """
+    Small models sometimes ignore the "one action per turn" instruction and
+    write several fabricated Thought/Action/Observation-shaped blocks in a
+    SINGLE response, ending with a Final Answer based on tool results it
+    never actually received — it's pattern-completing what a full ReAct
+    transcript looks like rather than genuinely pausing to wait for a real
+    observation. Checking "is there a Final Answer anywhere" before "is
+    there an earlier Action" would let that fabricated ending win. Instead,
+    whichever marker appears EARLIEST in the raw text is the only one that
+    counts; everything the model wrote after that point is discarded, so a
+    real tool call and a real observation are always forced in first.
+    """
+    action_idx = reply.find("Action:")
+    final_idx = reply.find("Final Answer:")
+    if action_idx == -1 and final_idx == -1:
+        return "none"
+    if final_idx == -1:
+        return "action"
+    if action_idx == -1:
+        return "final"
+    return "action" if action_idx < final_idx else "final"
+
+
 def _call_ollama_chat(messages: list) -> str:
     response = requests.post(
         f"{OLLAMA_URL}/api/chat",
@@ -275,44 +300,55 @@ def run_agent_investigation(db: Session, alert: models.Alert) -> dict:
             return _fallback(db, alert, trace, tools_used, iteration, reason=f"Ollama unreachable: {e}")
 
         trace.append({"type": "model", "content": reply})
+        marker = _first_marker(reply)
 
-        if final := _parse_final_answer(reply):
-            return {
-                "summary": final.get("summary"),
-                "severity": _normalize_severity(final.get("severity")),
-                "recommended_action": final.get("recommended_action"),
-                "key_evidence": final.get("key_evidence", []),
-                "trace": trace,
-                "tools_used": tools_used,
-                "iterations": iteration,
-                "fell_back": False,
-            }
+        if marker == "final":
+            if final := _parse_final_answer(reply):
+                return {
+                    "summary": final.get("summary"),
+                    "severity": _normalize_severity(final.get("severity")),
+                    "recommended_action": final.get("recommended_action"),
+                    "key_evidence": final.get("key_evidence", []),
+                    "trace": trace,
+                    "tools_used": tools_used,
+                    "iterations": iteration,
+                    "fell_back": False,
+                }
 
-        if action := _parse_action(reply):
-            tool_name, tool_input = action
-            tool_fn = TOOL_REGISTRY.get(tool_name)
-            if tool_fn is None:
-                observation = {"error": f"unknown tool '{tool_name}'"}
-            else:
-                try:
-                    observation = tool_fn(db, **tool_input)
-                    tools_used.append(tool_name)
-                except TypeError as e:
-                    # Feeds the error back as an observation so the model can
-                    # self-correct with more explicit arguments next turn,
-                    # rather than us just discarding the attempt.
-                    observation = {"error": f"bad arguments for {tool_name}: {e}"}
+        elif marker == "action":
+            if action := _parse_action(reply):
+                tool_name, tool_input = action
+                tool_fn = TOOL_REGISTRY.get(tool_name)
+                if tool_fn is None:
+                    observation = {"error": f"unknown tool '{tool_name}'"}
+                else:
+                    try:
+                        observation = tool_fn(db, **tool_input)
+                        tools_used.append(tool_name)
+                    except TypeError as e:
+                        # Feeds the error back as an observation so the model can
+                        # self-correct with more explicit arguments next turn,
+                        # rather than us just discarding the attempt.
+                        observation = {"error": f"bad arguments for {tool_name}: {e}"}
 
-            trace.append({"type": "action", "tool": tool_name, "input": tool_input})
-            trace.append({"type": "observation", "content": observation})
+                trace.append({"type": "action", "tool": tool_name, "input": tool_input})
+                trace.append({"type": "observation", "content": observation})
 
-            messages.append({"role": "assistant", "content": reply})
-            messages.append({"role": "user", "content": f"Observation: {json.dumps(observation)}"})
-            continue
+                # Deliberately do NOT echo the model's full raw reply back —
+                # it may contain fabricated later steps (see _first_marker).
+                # Only the genuine action + a real observation go back in,
+                # which is also what keeps the model anchored to reality
+                # rather than continuing its own fabrication next turn.
+                messages.append({
+                    "role": "assistant",
+                    "content": f"Action: {tool_name}\nAction Input: {json.dumps(tool_input)}",
+                })
+                messages.append({"role": "user", "content": f"Observation: {json.dumps(observation)}"})
+                continue
 
-        # Model didn't follow either format — nudge it once rather than
-        # giving up immediately, since small local models sometimes need
-        # a reminder to stay in format.
+        # Model didn't follow either format, or parsing failed — nudge it
+        # once rather than giving up immediately, since small local models
+        # sometimes need a reminder to stay in format.
         messages.append({"role": "assistant", "content": reply})
         messages.append({
             "role": "user",
