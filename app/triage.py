@@ -25,6 +25,9 @@ OLLAMA_URL = os.getenv("OLLAMA_URL", "http://ollama:11434")
 OLLAMA_MODEL = os.getenv("OLLAMA_MODEL", "llama3.2:1b")
 REQUEST_TIMEOUT_SECONDS = 60  # local CPU inference is slower than a hosted API — be generous
 
+VALID_SEVERITIES = {"low", "medium", "high", "critical"}
+FALLBACK_SEVERITY = "medium"  # used only if the model's JSON is missing/invalid severity
+
 SYSTEM_PROMPT = (
     "You are a SOC analyst assistant. You will be given a security alert "
     "and the raw log lines that triggered it. Produce a concise triage "
@@ -34,8 +37,25 @@ SYSTEM_PROMPT = (
     "preamble, in exactly this shape:\n"
     '{"summary": "2-3 plain-English sentences", '
     '"severity": "low" | "medium" | "high" | "critical", '
-    '"recommended_action": "one short, concrete next step"}'
+    '"recommended_action": "one short, concrete next step"}\n'
+    "The severity field is REQUIRED and must be exactly one of those four words."
 )
+
+
+def _normalize_severity(value) -> str:
+    """
+    Small local models occasionally omit the severity field or return
+    something outside the expected set, even while returning otherwise
+    valid JSON (so this isn't caught as an error). Without this, an alert
+    could silently end up with severity=None despite triage "succeeding"
+    — which permanently keeps the dashboard's estimated/unconfirmed chip
+    styling even though a real triage was run. Normalizing here means
+    every successful call produces a real, valid severity.
+    """
+    if isinstance(value, str) and value.strip().lower() in VALID_SEVERITIES:
+        return value.strip().lower()
+    logger.warning(f"Model returned missing/invalid severity ({value!r}); defaulting to {FALLBACK_SEVERITY}")
+    return FALLBACK_SEVERITY
 
 
 def _build_user_prompt(alert_type: str, description: str, raw_logs: list[str]) -> str:
@@ -74,7 +94,7 @@ def generate_triage(alert_type: str, description: str, raw_logs: list[str]) -> d
 
         return {
             "summary": parsed.get("summary"),
-            "severity": parsed.get("severity"),
+            "severity": _normalize_severity(parsed.get("severity")),
             "recommended_action": parsed.get("recommended_action"),
             "error": None,
         }

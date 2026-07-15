@@ -7,12 +7,14 @@ from uuid import UUID
 from typing import Optional
 from datetime import datetime, timedelta
 import os
+import json
 from .database import engine, get_db
 from . import models
 from .parsers import parse_log
 from .detections import run_all_detections, detect_cross_host_correlation
 from .auth import require_api_key
 from .triage import generate_triage
+from .agent import run_agent_investigation
 
 app = FastAPI(title="Custom SIEM")
 
@@ -73,6 +75,9 @@ def ingest_log(
         username=parsed["username"],
         attacker_ip=parsed["src_ip"],
         src_port=parsed["src_port"],
+        http_status=parsed.get("http_status"),
+        http_path=parsed.get("http_path"),
+        http_method=parsed.get("http_method"),
     )
     db.add(new_log)
     db.commit()
@@ -176,6 +181,91 @@ def triage_alert(alert_id: UUID, db: Session = Depends(get_db)):
         "severity": alert.severity,
         "recommended_action": alert.recommended_action,
     }
+
+
+@app.post("/alerts/{alert_id}/investigate", dependencies=[Depends(require_api_key)])
+def investigate_alert(alert_id: UUID, db: Session = Depends(get_db)):
+    """
+    Agentic investigation: unlike /triage (one prompt, one answer), this
+    runs a bounded ReAct loop — the model decides which read-only tools to
+    call (recent logs, threat intel, cross-host activity, host info),
+    observes results, and repeats before concluding. The full reasoning
+    trace is persisted to AgentInvestigation for auditability, not just
+    the final answer. Falls back to simple triage if the loop can't reach
+    a valid conclusion within its iteration cap. See app/agent.py.
+    """
+    alert = db.query(models.Alert).filter(models.Alert.id == alert_id).first()
+    if not alert:
+        raise HTTPException(status_code=404, detail="Alert not found")
+
+    result = run_agent_investigation(db, alert)
+
+    investigation = models.AgentInvestigation(
+        alert_id=alert.id,
+        trace=json.dumps(result["trace"]),
+        tools_used=json.dumps(result["tools_used"]),
+        final_summary=result["summary"],
+        final_severity=result["severity"],
+        recommended_action=result["recommended_action"],
+        key_evidence=json.dumps(result["key_evidence"]),
+        iterations=result["iterations"],
+        fell_back=result["fell_back"],
+    )
+    db.add(investigation)
+
+    # Same fields as /triage updates — so the dashboard chip/panel logic
+    # doesn't need to know or care whether an alert was assessed by the
+    # simple triage path or the full agent path.
+    if result["severity"]:
+        alert.severity = result["severity"]
+    if result["summary"]:
+        alert.triage_summary = result["summary"]
+    if result["recommended_action"]:
+        alert.recommended_action = result["recommended_action"]
+
+    db.commit()
+    db.refresh(investigation)
+
+    return {
+        "investigation_id": str(investigation.id),
+        "alert_id": str(alert.id),
+        "summary": result["summary"],
+        "severity": result["severity"],
+        "recommended_action": result["recommended_action"],
+        "key_evidence": result["key_evidence"],
+        "tools_used": result["tools_used"],
+        "iterations": result["iterations"],
+        "fell_back": result["fell_back"],
+        "trace": result["trace"],
+    }
+
+
+@app.get("/alerts/{alert_id}/investigations", dependencies=[Depends(require_api_key)])
+def get_investigations(alert_id: UUID, db: Session = Depends(get_db)):
+    """Returns past agent investigations for an alert, most recent first,
+    including the full reasoning trace — used by the dashboard to render
+    the "view agent trace" panel."""
+    rows = (
+        db.query(models.AgentInvestigation)
+        .filter(models.AgentInvestigation.alert_id == alert_id)
+        .order_by(models.AgentInvestigation.created_at.desc())
+        .all()
+    )
+    return [
+        {
+            "id": str(r.id),
+            "created_at": r.created_at.isoformat(),
+            "trace": json.loads(r.trace) if r.trace else [],
+            "tools_used": json.loads(r.tools_used) if r.tools_used else [],
+            "key_evidence": json.loads(r.key_evidence) if r.key_evidence else [],
+            "iterations": r.iterations,
+            "fell_back": r.fell_back,
+            "final_summary": r.final_summary,
+            "final_severity": r.final_severity,
+            "recommended_action": r.recommended_action,
+        }
+        for r in rows
+    ]
 
 
 @app.get("/dashboard")

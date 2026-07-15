@@ -20,6 +20,9 @@ class ParsedLog(TypedDict):
     username: Optional[str]
     src_ip: Optional[str]
     src_port: Optional[int]
+    http_status: Optional[int]
+    http_path: Optional[str]
+    http_method: Optional[str]
 
 
 IP_PATTERN = r"(?P<ip>(?:\d{1,3}\.){3}\d{1,3})"
@@ -37,6 +40,14 @@ SSH_INVALID_USER_RE = re.compile(
     re.IGNORECASE,
 )
 
+# Apache/Nginx Combined Log Format, e.g.:
+# 203.0.113.5 - - [10/Jul/2026:14:32:10 +0000] "GET /wp-admin/ HTTP/1.1" 404 512 "-" "Mozilla/5.0"
+WEB_LOG_RE = re.compile(
+    r'^(?P<ip>\S+) \S+ \S+ \[(?P<datetime>[^\]]+)\] '
+    r'"(?P<method>[A-Z]+) (?P<path>\S+) HTTP/[\d.]+" '
+    r'(?P<status>\d{3}) (?P<size>\S+)'
+)
+
 GENERIC_IP_RE = re.compile(r"\b(?:\d{1,3}\.){3}\d{1,3}\b")
 
 
@@ -48,6 +59,9 @@ def parse_ssh_log(raw_log: str) -> ParsedLog:
             "username": match.group("user"),
             "src_ip": match.group("ip"),
             "src_port": int(match.group("port")),
+            "http_status": None,
+            "http_path": None,
+            "http_method": None,
         }
 
     if match := SSH_ACCEPTED_RE.search(raw_log):
@@ -56,6 +70,9 @@ def parse_ssh_log(raw_log: str) -> ParsedLog:
             "username": match.group("user"),
             "src_ip": match.group("ip"),
             "src_port": int(match.group("port")),
+            "http_status": None,
+            "http_path": None,
+            "http_method": None,
         }
 
     if match := SSH_INVALID_USER_RE.search(raw_log):
@@ -64,9 +81,39 @@ def parse_ssh_log(raw_log: str) -> ParsedLog:
             "username": match.group("user"),
             "src_ip": match.group("ip"),
             "src_port": None,
+            "http_status": None,
+            "http_path": None,
+            "http_method": None,
         }
 
     return _generic_fallback(raw_log)
+
+
+def parse_web_log(raw_log: str) -> ParsedLog:
+    """
+    Parses Apache/Nginx Combined Log Format lines. Buckets event_type by
+    status class (http_2xx/3xx/4xx/5xx) rather than the exact status code —
+    this keeps detection queries as fast indexed equality lookups on
+    event_type (same pattern as the SSH parser), while the exact code is
+    still preserved separately in http_status for display/detail.
+    """
+    match = WEB_LOG_RE.search(raw_log)
+    if not match:
+        return _generic_fallback(raw_log)
+
+    status = int(match.group("status"))
+    status_class = status // 100
+    event_type = f"http_{status_class}xx" if status_class in (2, 3, 4, 5) else "http_other"
+
+    return {
+        "event_type": event_type,
+        "username": None,
+        "src_ip": match.group("ip"),
+        "src_port": None,
+        "http_status": status,
+        "http_path": match.group("path"),
+        "http_method": match.group("method"),
+    }
 
 
 def _generic_fallback(raw_log: str) -> ParsedLog:
@@ -77,6 +124,9 @@ def _generic_fallback(raw_log: str) -> ParsedLog:
         "username": None,
         "src_ip": match.group(0) if match else None,
         "src_port": None,
+        "http_status": None,
+        "http_path": None,
+        "http_method": None,
     }
 
 
@@ -85,6 +135,10 @@ PARSERS = {
     "sshd": parse_ssh_log,
     "ssh": parse_ssh_log,
     "auth": parse_ssh_log,
+    "nginx": parse_web_log,
+    "apache": parse_web_log,
+    "web": parse_web_log,
+    "access": parse_web_log,
 }
 
 

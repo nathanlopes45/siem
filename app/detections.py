@@ -26,6 +26,10 @@ THREAT_INTEL_IPS = {
 BRUTEFORCE_THRESHOLD = 5
 CROSS_HOST_HOST_THRESHOLD = 3   # distinct hosts an IP must hit to count as cross-host correlation
 CROSS_HOST_WINDOW_MINUTES = 30
+WEB_SCAN_THRESHOLD = 10         # 4xx responses from one IP to count as scanning
+WEB_SCAN_WINDOW_MINUTES = 5
+ERROR_SPIKE_THRESHOLD = 10      # 5xx responses on a host to count as a spike
+ERROR_SPIKE_WINDOW_MINUTES = 5
 
 
 def _create_alert_if_new(db: Session, host_id: Optional[UUID], alert_type: str, description: str):
@@ -157,8 +161,65 @@ def detect_cross_host_correlation(db: Session):
         )
 
 
+def detect_web_scanning(db: Session, host_id: UUID, window_minutes: int = WEB_SCAN_WINDOW_MINUTES):
+    """
+    One IP generating many HTTP 4xx responses against a host in a short
+    window is a classic directory/file brute-forcing signature (tools like
+    gobuster/dirbuster/ffuf work exactly this way — requesting a large
+    wordlist of paths and watching for anything that isn't a 404).
+    MITRE T1595.003 — Active Scanning: Wordlist Scanning.
+    """
+    since = datetime.utcnow() - timedelta(minutes=window_minutes)
+    results = (
+        db.query(models.RawLog.attacker_ip, func.count().label("count"))
+        .filter(
+            models.RawLog.host_id == host_id,
+            models.RawLog.event_type == "http_4xx",
+            models.RawLog.attacker_ip.isnot(None),
+            models.RawLog.received_at >= since,
+        )
+        .group_by(models.RawLog.attacker_ip)
+        .having(func.count() >= WEB_SCAN_THRESHOLD)
+        .all()
+    )
+    for ip, count in results:
+        _create_alert_if_new(
+            db, host_id, "Web Reconnaissance (404 Scanning)",
+            f"IP {ip} generated {count} HTTP 4xx responses on this host within "
+            f"{window_minutes} minutes — possible directory/file brute-forcing"
+        )
+
+
+def detect_error_spike(db: Session, host_id: UUID, window_minutes: int = ERROR_SPIKE_WINDOW_MINUTES):
+    """
+    A burst of HTTP 5xx responses on a host is an anomaly worth surfacing,
+    but — unlike the other detectors here — it isn't inherently an attack
+    signature. It could indicate a denial-of-service attempt, or it could
+    just be an application bug or resource exhaustion under legitimate
+    load. Framed as "investigate this," not "this is malicious."
+    """
+    since = datetime.utcnow() - timedelta(minutes=window_minutes)
+    count = (
+        db.query(func.count())
+        .filter(
+            models.RawLog.host_id == host_id,
+            models.RawLog.event_type == "http_5xx",
+            models.RawLog.received_at >= since,
+        )
+        .scalar()
+    )
+    if count >= ERROR_SPIKE_THRESHOLD:
+        _create_alert_if_new(
+            db, host_id, "Elevated Server Error Rate",
+            f"{count} HTTP 5xx responses on this host within {window_minutes} minutes "
+            f"— possible denial-of-service attempt or application fault"
+        )
+
+
 def run_all_detections(db: Session, host_id: UUID):
     detect_bruteforce(db, host_id)
     detect_bruteforce(db, host_id, window_minutes=2)
     detect_successful_bruteforce(db, host_id)
     detect_threat_intel(db, host_id)
+    detect_web_scanning(db, host_id)
+    detect_error_spike(db, host_id)

@@ -37,6 +37,7 @@ services:
       ALERT_WEBHOOK_URL: ${ALERT_WEBHOOK_URL}
       OLLAMA_URL: http://ollama:11434
       OLLAMA_MODEL: ${OLLAMA_MODEL:-llama3.2:1b}
+      OLLAMA_AGENT_MODEL: ${OLLAMA_AGENT_MODEL:-llama3.2:1b}
     ports:
       - "8000:8000"
     volumes:

@@ -339,6 +339,79 @@
   }
   .triage-result .label:first-child { margin-top: 0; }
 
+  .assess-actions { display: flex; gap: 8px; margin-top: 10px; }
+  .agent-btn { border-color: var(--high); color: var(--high); }
+  .agent-btn:hover { background: rgba(255,162,74,0.08); }
+  .assess-hint {
+    font-family: var(--sans);
+    font-size: 11px;
+    color: var(--faint);
+    margin-top: 8px;
+    line-height: 1.5;
+  }
+
+  .trace-toggle {
+    font-family: var(--mono);
+    font-size: 10.5px;
+    color: var(--muted);
+    cursor: pointer;
+    margin-top: 12px;
+    text-transform: uppercase;
+    letter-spacing: 0.04em;
+  }
+  .trace-toggle:hover { color: var(--pulse); }
+
+  .trace-container { display: none; margin-top: 8px; }
+  .trace-container.open { display: block; }
+  .trace-loading {
+    font-family: var(--mono);
+    font-size: 11px;
+    color: var(--faint);
+    padding: 8px 0;
+  }
+  .trace-meta {
+    font-family: var(--mono);
+    font-size: 10px;
+    color: var(--faint);
+    margin-bottom: 8px;
+    text-transform: uppercase;
+    letter-spacing: 0.04em;
+  }
+  .trace-step {
+    padding: 8px 10px;
+    margin-bottom: 4px;
+    border-radius: 3px;
+    border-left: 2px solid var(--hairline);
+    background: var(--bg);
+  }
+  .trace-step .trace-label {
+    display: block;
+    font-family: var(--mono);
+    font-size: 9px;
+    text-transform: uppercase;
+    letter-spacing: 0.06em;
+    color: var(--faint);
+    margin-bottom: 3px;
+  }
+  .trace-step pre {
+    margin: 0;
+    white-space: pre-wrap;
+    word-break: break-word;
+    font-family: var(--mono);
+    font-size: 11px;
+    color: var(--text);
+  }
+  .trace-step code {
+    font-family: var(--mono);
+    font-size: 11px;
+    color: var(--pulse);
+  }
+  .trace-context { border-left-color: var(--faint); }
+  .trace-model { border-left-color: var(--muted); }
+  .trace-action { border-left-color: var(--pulse); }
+  .trace-observation { border-left-color: var(--high); }
+  .trace-fallback { border-left-color: var(--critical); }
+
   /* ---------- Sidebar ---------- */
   .side-col { display: flex; flex-direction: column; }
 
@@ -543,8 +616,10 @@ const SEVERITY_FALLBACK = {
   "Threat Intel Match": "critical",
   "Successful Brute Force": "critical",
   "Cross-Host Brute Force": "high",
+  "Web Reconnaissance (404 Scanning)": "high",
   "Rapid Brute Force": "medium",
   "Brute Force Attempt": "medium",
+  "Elevated Server Error Rate": "medium",
 };
 
 let apiKey = localStorage.getItem("siem_api_key") || "";
@@ -702,7 +777,7 @@ function renderAlerts() {
     const stillVisible = alerts.find(a => a.id === expandedAlertId);
     if (stillVisible) {
       openDetailPanel(expandedAlertId, stillVisible, false);
-    } else if (!triageInFlight[expandedAlertId]) {
+    } else if (!assessmentInFlight[expandedAlertId]) {
       expandedAlertId = null;
     }
   }
@@ -734,91 +809,160 @@ function openDetailPanel(id, alert, shouldScroll) {
 }
 
 /* ---------- Triage: in-flight state survives auto-refresh re-renders ---------- */
-let triageInFlight = {};   // alertId -> startedAt timestamp
+let assessmentInFlight = {};   // alertId -> { startedAt, label }
 let elapsedTickInterval = null;
 
 function renderDetailForAlert(id, alert) {
   const detail = document.getElementById("detail-" + id);
   if (!detail) return;
 
-  if (triageInFlight[id]) {
-    renderLoadingState(id, detail, triageInFlight[id]);
+  if (assessmentInFlight[id]) {
+    renderLoadingState(id, detail, assessmentInFlight[id]);
   } else if (alert.triage_summary) {
-    detail.innerHTML = renderTriageBlock(alert);
+    detail.innerHTML = renderTriageBlock(alert, id);
+    wireTraceToggle(id);
   } else {
-    detail.innerHTML = `<button class="triage-btn" id="triage-btn-${id}">Run AI Triage</button>`;
-    detail.querySelector("button").addEventListener("click", (e) => {
+    detail.innerHTML = `
+      <div class="assess-actions">
+        <button class="triage-btn" id="triage-btn-${id}">Quick Triage</button>
+        <button class="triage-btn agent-btn" id="agent-btn-${id}">Investigate (Agent)</button>
+      </div>
+      <div class="assess-hint">Quick Triage: one model call, fast. Investigate: multi-step agent that pulls related logs, threat intel, and cross-host activity before concluding — slower, more thorough.</div>
+    `;
+    detail.querySelector(`#triage-btn-${id}`).addEventListener("click", (e) => {
       e.stopPropagation();
-      startTriage(id);
+      startAssessment(id, "triage", "Running local model analysis");
+    });
+    detail.querySelector(`#agent-btn-${id}`).addEventListener("click", (e) => {
+      e.stopPropagation();
+      startAssessment(id, "investigate", "Agent investigating");
     });
   }
 }
 
-function renderLoadingState(id, detail, startedAt) {
+function renderLoadingState(id, detail, inFlight) {
   detail.innerHTML = `
     <div class="triage-loading">
       <span class="triage-spinner"></span>
-      <span>Running local model analysis<span id="triage-elapsed-${id}"></span></span>
+      <span>${inFlight.label}<span id="triage-elapsed-${id}"></span></span>
     </div>
   `;
-  updateElapsed(id, startedAt);
+  updateElapsed(id, inFlight.startedAt);
   if (elapsedTickInterval) clearInterval(elapsedTickInterval);
-  elapsedTickInterval = setInterval(() => updateElapsed(id, startedAt), 1000);
+  elapsedTickInterval = setInterval(() => updateElapsed(id, inFlight.startedAt), 1000);
 }
 
 function updateElapsed(id, startedAt) {
   const el = document.getElementById(`triage-elapsed-${id}`);
   if (!el) {
-    // the element this timer was updating is gone (panel closed/rebuilt
-    // without this id) — stop ticking instead of running forever
     if (elapsedTickInterval) { clearInterval(elapsedTickInterval); elapsedTickInterval = null; }
     return;
   }
   el.textContent = ` — ${Math.floor((Date.now() - startedAt) / 1000)}s`;
 }
 
-async function startTriage(id) {
-  triageInFlight[id] = Date.now();
+async function startAssessment(id, kind, label) {
+  assessmentInFlight[id] = { startedAt: Date.now(), label };
   const detail = document.getElementById("detail-" + id);
-  if (detail) renderLoadingState(id, detail, triageInFlight[id]);
+  if (detail) renderLoadingState(id, detail, assessmentInFlight[id]);
+
+  const endpoint = kind === "investigate" ? `/alerts/${id}/investigate` : `/alerts/${id}/triage`;
 
   try {
-    const result = await fetch(`/alerts/${id}/triage`, {
+    const result = await fetch(endpoint, {
       method: "POST",
       headers: { "X-API-Key": apiKey },
     }).then(r => {
-      if (!r.ok) throw new Error("triage failed");
+      if (!r.ok) throw new Error(`${kind} failed`);
       return r.json();
     });
 
-    delete triageInFlight[id];
+    delete assessmentInFlight[id];
 
     // Always mutate whatever the CURRENT alert object is for this id —
     // cachedAlerts may have been fully replaced by an auto-refresh while
-    // this request was in flight, so a captured reference from click-time
-    // could be stale/orphaned by now.
+    // this request was in flight.
     const current = cachedAlerts.find(a => a.id === id);
     if (current) {
       current.severity = result.severity;
-      current.triage_summary = result.triage_summary;
+      current.triage_summary = result.triage_summary || result.summary;
       current.recommended_action = result.recommended_action;
     }
     renderAlerts();
     renderBreakdown(cachedAlerts); // reflect the new confirmed severity immediately
   } catch (err) {
-    delete triageInFlight[id];
+    delete assessmentInFlight[id];
     const detailEl = document.getElementById("detail-" + id);
     if (detailEl) {
-      detailEl.innerHTML = `<button class="triage-btn" id="triage-btn-${id}">Triage failed — retry</button>`;
+      detailEl.innerHTML = `<button class="triage-btn" id="retry-btn-${id}">${kind === "investigate" ? "Investigation" : "Triage"} failed — retry</button>`;
       detailEl.querySelector("button").addEventListener("click", (e) => {
         e.stopPropagation();
-        startTriage(id);
+        startAssessment(id, kind, label);
       });
     }
   }
 }
 
-function renderTriageBlock(alert) {
+/* ---------- Agent trace viewer ---------- */
+function wireTraceToggle(id) {
+  const link = document.getElementById(`trace-toggle-${id}`);
+  if (!link) return;
+  link.addEventListener("click", async (e) => {
+    e.stopPropagation();
+    const container = document.getElementById(`trace-container-${id}`);
+    if (!container) return;
+    if (container.classList.contains("open")) {
+      container.classList.remove("open");
+      link.textContent = "View agent reasoning trace ▾";
+      return;
+    }
+    container.innerHTML = `<div class="trace-loading">Loading trace…</div>`;
+    container.classList.add("open");
+    link.textContent = "Hide agent reasoning trace ▴";
+    try {
+      const investigations = await fetch(`/alerts/${id}/investigations`, {
+        headers: { "X-API-Key": apiKey },
+      }).then(r => r.json());
+      if (!investigations.length) {
+        container.innerHTML = `<div class="trace-loading">No agent investigation has been run for this alert yet — click "Investigate (Agent)" above.</div>`;
+        return;
+      }
+      container.innerHTML = renderTrace(investigations[0]);
+    } catch (err) {
+      container.innerHTML = `<div class="trace-loading">Could not load trace.</div>`;
+    }
+  });
+}
+
+function renderTrace(inv) {
+  const stepsHtml = inv.trace.map(step => {
+    if (step.type === "context") {
+      return `<div class="trace-step trace-context"><span class="trace-label">Context</span><pre>${step.content}</pre></div>`;
+    }
+    if (step.type === "model") {
+      return `<div class="trace-step trace-model"><span class="trace-label">Model</span><pre>${step.content}</pre></div>`;
+    }
+    if (step.type === "action") {
+      return `<div class="trace-step trace-action"><span class="trace-label">Tool Call</span><code>${step.tool}(${JSON.stringify(step.input)})</code></div>`;
+    }
+    if (step.type === "observation") {
+      return `<div class="trace-step trace-observation"><span class="trace-label">Observation</span><pre>${JSON.stringify(step.content, null, 2)}</pre></div>`;
+    }
+    if (step.type === "fallback") {
+      return `<div class="trace-step trace-fallback"><span class="trace-label">Fallback</span><pre>${step.content}</pre></div>`;
+    }
+    return "";
+  }).join("");
+
+  return `
+    <div class="trace-meta">
+      ${inv.iterations} iteration${inv.iterations === 1 ? "" : "s"} · tools used: ${inv.tools_used.length ? inv.tools_used.join(", ") : "none"}${inv.fell_back ? " · fell back to simple triage" : ""}
+    </div>
+    ${stepsHtml}
+  `;
+}
+
+function renderTriageBlock(alert, id) {
   return `
     <div class="triage-result">
       <div class="label">Summary</div>
@@ -826,6 +970,8 @@ function renderTriageBlock(alert) {
       <div class="label">Recommended Action</div>
       <div>${alert.recommended_action || "—"}</div>
     </div>
+    <div class="trace-toggle" id="trace-toggle-${id}">View agent reasoning trace ▾</div>
+    <div class="trace-container" id="trace-container-${id}"></div>
   `;
 }
 
@@ -912,7 +1058,12 @@ function renderBreakdown(alerts) {
         onClick: (evt, elements) => {
           if (!elements.length) return;
           const idx = elements[0].index;
-          activeFilter = { type: "severity", value: labels[idx] };
+          // Read from typeChart.data.labels, NOT the outer `labels` const —
+          // that const is a snapshot from whenever this chart was first
+          // created, and every .update() call since then changed the
+          // chart's real data without this closure knowing. Reading from
+          // the live chart instance is always current.
+          activeFilter = { type: "severity", value: typeChart.data.labels[idx] };
           document.getElementById("clearFilter").style.display = "inline";
           renderAlerts();
         },
