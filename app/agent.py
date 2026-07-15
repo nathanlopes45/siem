@@ -137,6 +137,33 @@ def _extract_json_object(text: str) -> Optional[dict]:
     return None
 
 
+def _repair_truncated_json(text: str) -> Optional[dict]:
+    """
+    Handles a specific, common failure mode: the model's response gets cut
+    off mid-object (e.g. a "num_predict" limit hit right after the last
+    field, before the closing brace) — the JSON is otherwise complete and
+    valid, just missing however many closing brackets/braces it needs.
+    Rather than discarding an answer that's 95% there, count what's unclosed
+    and append it, then retry parsing.
+    """
+    start = text.find("{")
+    if start == -1:
+        return None
+    snippet = text[start:].rstrip()
+    snippet = re.sub(r",\s*$", "", snippet)  # drop a dangling trailing comma, if any
+
+    open_brackets = snippet.count("[") - snippet.count("]")
+    open_braces = snippet.count("{") - snippet.count("}")
+    if open_brackets < 0 or open_braces < 0:
+        return None  # more closes than opens — not a simple truncation, don't guess
+
+    repaired = snippet + ("]" * open_brackets) + ("}" * open_braces)
+    try:
+        return json.loads(repaired)
+    except json.JSONDecodeError:
+        return None
+
+
 def _extract_key_value_pairs(text: str) -> dict:
     """
     Fallback for when a model writes arguments as key=value or key: value
@@ -169,6 +196,8 @@ def _parse_action(reply: str) -> Optional[tuple]:
 
     args = _extract_json_object(remainder)
     if args is None:
+        args = _repair_truncated_json(remainder)
+    if args is None:
         args = _extract_key_value_pairs(remainder)
     return tool_name, args
 
@@ -184,8 +213,11 @@ def _parse_final_answer(reply: str) -> Optional[dict]:
     if parsed is not None:
         return parsed
 
-    # No valid JSON object found — salvage individual fields instead of
-    # discarding an otherwise-reasonable answer just because it's missing
+    if repaired := _repair_truncated_json(segment):
+        return repaired
+
+    # No valid or repairable JSON found — salvage individual fields instead
+    # of discarding an otherwise-reasonable answer just because it's missing
     # a brace or a stray quote.
     salvaged = _extract_key_value_pairs(segment)
     if "summary" in salvaged or "severity" in salvaged:
@@ -198,7 +230,15 @@ def _parse_final_answer(reply: str) -> Optional[dict]:
 def _call_ollama_chat(messages: list) -> str:
     response = requests.post(
         f"{OLLAMA_URL}/api/chat",
-        json={"model": OLLAMA_AGENT_MODEL, "messages": messages, "stream": False},
+        json={
+            "model": OLLAMA_AGENT_MODEL,
+            "messages": messages,
+            "stream": False,
+            # Final Answer JSON (summary + severity + recommended_action +
+            # key_evidence) can run long enough to hit a default output cap
+            # and get truncated mid-object — give it real headroom.
+            "options": {"num_predict": 600},
+        },
         timeout=REQUEST_TIMEOUT_SECONDS,
     )
     response.raise_for_status()
