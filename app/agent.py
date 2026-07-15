@@ -120,8 +120,79 @@ Rules:
 - Never suggest or imply taking any destructive action (blocking, banning, deleting) — you are investigation-only. recommended_action should describe what a human analyst should look into or do next.
 """
 
-ACTION_RE = re.compile(r"Action:\s*(\w+)\s*\nAction Input:\s*(\{.*\})", re.DOTALL)
-FINAL_RE = re.compile(r"Final Answer:\s*(\{.*\})", re.DOTALL)
+ACTION_NAME_RE = re.compile(r"Action:\s*([A-Za-z_][A-Za-z0-9_]*)")
+JSON_OBJECT_RE = re.compile(r"\{.*\}", re.DOTALL)
+KEY_VALUE_RE = re.compile(r"(\w+)\s*[=:]\s*['\"]?([^,'\")\n]+)['\"]?")
+
+
+def _extract_json_object(text: str) -> Optional[dict]:
+    """Finds the first {...} blob anywhere in text and parses it. Small
+    models sometimes wrap it in extra prose despite instructions not to —
+    searching rather than requiring an exact match is more forgiving."""
+    if match := JSON_OBJECT_RE.search(text):
+        try:
+            return json.loads(match.group(0))
+        except json.JSONDecodeError:
+            return None
+    return None
+
+
+def _extract_key_value_pairs(text: str) -> dict:
+    """
+    Fallback for when a model writes arguments as key=value or key: value
+    pairs instead of valid JSON (e.g. "check_threat_intel(ip=1.2.3.4)" or
+    a Final Answer missing its enclosing braces) — salvages what it can
+    rather than discarding a mostly-sensible response outright.
+    """
+    return {k: v.strip() for k, v in KEY_VALUE_RE.findall(text)}
+
+
+def _parse_action(reply: str) -> Optional[tuple]:
+    """
+    Returns (tool_name, args_dict) if an Action can be identified, tolerating:
+      - the tool name immediately followed by "(args)" on the same line
+      - Action Input as valid JSON, key=value pairs, or missing entirely
+    Returns None if no "Action:" is present at all.
+    """
+    name_match = ACTION_NAME_RE.search(reply)
+    if not name_match:
+        return None
+    tool_name = name_match.group(1)
+
+    # Everything after the tool name, through the end of the reply (or the
+    # next Thought/Action/Final Answer marker) is fair game for arguments —
+    # covers both a same-line "(args)" and a separate "Action Input:" line.
+    remainder = reply[name_match.end():]
+    cutoff = re.search(r"\n\s*(Thought:|Action:|Final Answer:)", remainder)
+    if cutoff:
+        remainder = remainder[:cutoff.start()]
+
+    args = _extract_json_object(remainder)
+    if args is None:
+        args = _extract_key_value_pairs(remainder)
+    return tool_name, args
+
+
+def _parse_final_answer(reply: str) -> Optional[dict]:
+    """Returns the Final Answer dict, tolerating missing braces or minor
+    JSON errors by falling back to key/value salvage."""
+    if "Final Answer:" not in reply:
+        return None
+    segment = reply.split("Final Answer:", 1)[1]
+
+    parsed = _extract_json_object(segment)
+    if parsed is not None:
+        return parsed
+
+    # No valid JSON object found — salvage individual fields instead of
+    # discarding an otherwise-reasonable answer just because it's missing
+    # a brace or a stray quote.
+    salvaged = _extract_key_value_pairs(segment)
+    if "summary" in salvaged or "severity" in salvaged:
+        if "key_evidence" in salvaged:
+            salvaged["key_evidence"] = [salvaged["key_evidence"]]
+        return salvaged
+    return None
 
 
 def _call_ollama_chat(messages: list) -> str:
@@ -165,29 +236,20 @@ def run_agent_investigation(db: Session, alert: models.Alert) -> dict:
 
         trace.append({"type": "model", "content": reply})
 
-        if final_match := FINAL_RE.search(reply):
-            try:
-                final = json.loads(final_match.group(1))
-                return {
-                    "summary": final.get("summary"),
-                    "severity": _normalize_severity(final.get("severity")),
-                    "recommended_action": final.get("recommended_action"),
-                    "key_evidence": final.get("key_evidence", []),
-                    "trace": trace,
-                    "tools_used": tools_used,
-                    "iterations": iteration,
-                    "fell_back": False,
-                }
-            except json.JSONDecodeError:
-                pass  # fall through to nudge the model below
+        if final := _parse_final_answer(reply):
+            return {
+                "summary": final.get("summary"),
+                "severity": _normalize_severity(final.get("severity")),
+                "recommended_action": final.get("recommended_action"),
+                "key_evidence": final.get("key_evidence", []),
+                "trace": trace,
+                "tools_used": tools_used,
+                "iterations": iteration,
+                "fell_back": False,
+            }
 
-        if action_match := ACTION_RE.search(reply):
-            tool_name = action_match.group(1)
-            try:
-                tool_input = json.loads(action_match.group(2))
-            except json.JSONDecodeError:
-                tool_input = {}
-
+        if action := _parse_action(reply):
+            tool_name, tool_input = action
             tool_fn = TOOL_REGISTRY.get(tool_name)
             if tool_fn is None:
                 observation = {"error": f"unknown tool '{tool_name}'"}
@@ -196,6 +258,9 @@ def run_agent_investigation(db: Session, alert: models.Alert) -> dict:
                     observation = tool_fn(db, **tool_input)
                     tools_used.append(tool_name)
                 except TypeError as e:
+                    # Feeds the error back as an observation so the model can
+                    # self-correct with more explicit arguments next turn,
+                    # rather than us just discarding the attempt.
                     observation = {"error": f"bad arguments for {tool_name}: {e}"}
 
             trace.append({"type": "action", "tool": tool_name, "input": tool_input})

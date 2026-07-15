@@ -787,6 +787,7 @@ function toggleDetail(id, alert) {
   if (expandedAlertId === id) {
     closeAllDetails();
     expandedAlertId = null;
+    if (traceOpenForAlertId === id) traceOpenForAlertId = null;
     return;
   }
   openDetailPanel(id, alert, true);
@@ -878,6 +879,7 @@ async function startAssessment(id, kind, label) {
     });
 
     delete assessmentInFlight[id];
+    delete cachedTraces[id]; // invalidate — a new investigation may have just been run
 
     // Always mutate whatever the CURRENT alert object is for this id —
     // cachedAlerts may have been fully replaced by an auto-refresh while
@@ -904,34 +906,67 @@ async function startAssessment(id, kind, label) {
 }
 
 /* ---------- Agent trace viewer ---------- */
+let cachedTraces = {};        // alertId -> investigations array, avoids refetching on every reopen
+let traceOpenForAlertId = null;  // survives re-renders, same pattern as expandedAlertId
+
 function wireTraceToggle(id) {
   const link = document.getElementById(`trace-toggle-${id}`);
   if (!link) return;
-  link.addEventListener("click", async (e) => {
+
+  link.addEventListener("click", (e) => {
     e.stopPropagation();
-    const container = document.getElementById(`trace-container-${id}`);
-    if (!container) return;
-    if (container.classList.contains("open")) {
-      container.classList.remove("open");
-      link.textContent = "View agent reasoning trace ▾";
-      return;
-    }
-    container.innerHTML = `<div class="trace-loading">Loading trace…</div>`;
-    container.classList.add("open");
-    link.textContent = "Hide agent reasoning trace ▴";
-    try {
-      const investigations = await fetch(`/alerts/${id}/investigations`, {
-        headers: { "X-API-Key": apiKey },
-      }).then(r => r.json());
-      if (!investigations.length) {
-        container.innerHTML = `<div class="trace-loading">No agent investigation has been run for this alert yet — click "Investigate (Agent)" above.</div>`;
-        return;
-      }
-      container.innerHTML = renderTrace(investigations[0]);
-    } catch (err) {
-      container.innerHTML = `<div class="trace-loading">Could not load trace.</div>`;
+    if (traceOpenForAlertId === id) {
+      traceOpenForAlertId = null;
+      closeTracePanel(id);
+    } else {
+      traceOpenForAlertId = id;
+      showTracePanel(id);
     }
   });
+
+  // Restore trace-panel-open state after any rebuild (post-triage update
+  // or the 10s auto-refresh) — without this, the trace silently collapses
+  // a few seconds after opening, exactly like the outer alert panel did
+  // before that was fixed.
+  if (traceOpenForAlertId === id) {
+    showTracePanel(id);
+  }
+}
+
+function closeTracePanel(id) {
+  const container = document.getElementById(`trace-container-${id}`);
+  const link = document.getElementById(`trace-toggle-${id}`);
+  if (container) container.classList.remove("open");
+  if (link) link.textContent = "View agent reasoning trace ▾";
+}
+
+async function showTracePanel(id) {
+  const container = document.getElementById(`trace-container-${id}`);
+  const link = document.getElementById(`trace-toggle-${id}`);
+  if (!container || !link) return;
+
+  link.textContent = "Hide agent reasoning trace ▴";
+  container.classList.add("open");
+
+  if (cachedTraces[id]) {
+    container.innerHTML = cachedTraces[id].length
+      ? renderTrace(cachedTraces[id][0])
+      : `<div class="trace-loading">No agent investigation has been run for this alert yet — click "Investigate (Agent)" above.</div>`;
+    return;
+  }
+
+  container.innerHTML = `<div class="trace-loading">Loading trace…</div>`;
+  try {
+    const investigations = await fetch(`/alerts/${id}/investigations`, {
+      headers: { "X-API-Key": apiKey },
+    }).then(r => r.json());
+    cachedTraces[id] = investigations;
+    container.innerHTML = investigations.length
+      ? renderTrace(investigations[0])
+      : `<div class="trace-loading">No agent investigation has been run for this alert yet — click "Investigate (Agent)" above.</div>`;
+  } catch (err) {
+    container.innerHTML = `<div class="trace-loading">Could not load trace.</div>`;
+  }
 }
 
 function renderTrace(inv) {
