@@ -3,7 +3,7 @@ Detection engine.
 
 Extracted from main.py so both the API process and the background worker
 (app/worker.py) can run the same detection logic without duplicating it.
-Detection is deliberately NOT called from the log-ingestion endpoint —
+Detection is deliberately NOT called from the log-ingestion endpoint,
 see worker.py for why.
 """
 
@@ -42,7 +42,7 @@ def _create_alert_if_new(db: Session, host_id: Optional[UUID], alert_type: str, 
     db.add(models.Alert(host_id=host_id, alert_type=alert_type, description=description))
     db.commit()
 
-    # Only fires for genuinely new alerts, never for duplicates — this is
+    # Only fires for genuinely new alerts, never for duplicates, this is
     # what keeps notification volume sane instead of re-pinging on every
     # detection cycle for an attack that's already been alerted on.
     send_alert_notification(alert_type, description, host_id)
@@ -125,7 +125,7 @@ def detect_threat_intel(db: Session, host_id: UUID):
 
 def detect_cross_host_correlation(db: Session):
     """
-    Unlike every other detector, this is NOT scoped to a single host — it
+    Unlike every other detector, this is NOT scoped to a single host, it
     looks for one source IP with failed_password attempts against multiple
     DISTINCT hosts within a recent window. A single host being brute-forced
     is noisy but common; the same IP hitting 3+ different hosts in 30
@@ -133,7 +133,7 @@ def detect_cross_host_correlation(db: Session):
     credential-stuffing across your whole environment (MITRE T1110, with
     lateral-movement / infrastructure-wide targeting context).
 
-    Because this isn't host-scoped, the resulting Alert has host_id=None —
+    Because this isn't host-scoped, the resulting Alert has host_id=None,
     it's a fleet-wide finding, not a per-host one.
     """
     since = datetime.utcnow() - timedelta(minutes=CROSS_HOST_WINDOW_MINUTES)
@@ -165,9 +165,9 @@ def detect_web_scanning(db: Session, host_id: UUID, window_minutes: int = WEB_SC
     """
     One IP generating many HTTP 4xx responses against a host in a short
     window is a classic directory/file brute-forcing signature (tools like
-    gobuster/dirbuster/ffuf work exactly this way — requesting a large
+    gobuster/dirbuster/ffuf work exactly this way, requesting a large
     wordlist of paths and watching for anything that isn't a 404).
-    MITRE T1595.003 — Active Scanning: Wordlist Scanning.
+    MITRE T1595.003, Active Scanning: Wordlist Scanning.
     """
     since = datetime.utcnow() - timedelta(minutes=window_minutes)
     results = (
@@ -186,14 +186,14 @@ def detect_web_scanning(db: Session, host_id: UUID, window_minutes: int = WEB_SC
         _create_alert_if_new(
             db, host_id, "Web Reconnaissance (404 Scanning)",
             f"IP {ip} generated {count} HTTP 4xx responses on this host within "
-            f"{window_minutes} minutes — possible directory/file brute-forcing"
+            f"{window_minutes} minutes, possible directory/file brute-forcing"
         )
 
 
 def detect_error_spike(db: Session, host_id: UUID, window_minutes: int = ERROR_SPIKE_WINDOW_MINUTES):
     """
     A burst of HTTP 5xx responses on a host is an anomaly worth surfacing,
-    but — unlike the other detectors here — it isn't inherently an attack
+    but, unlike the other detectors here, it isn't inherently an attack
     signature. It could indicate a denial-of-service attempt, or it could
     just be an application bug or resource exhaustion under legitimate
     load. Framed as "investigate this," not "this is malicious."
@@ -211,8 +211,8 @@ def detect_error_spike(db: Session, host_id: UUID, window_minutes: int = ERROR_S
     if count >= ERROR_SPIKE_THRESHOLD:
         _create_alert_if_new(
             db, host_id, "Elevated Server Error Rate",
-            f"{count} HTTP 5xx responses on this host within {window_minutes} minutes "
-            f"— possible denial-of-service attempt or application fault"
+            f"{count} HTTP 5xx responses on this host within {window_minutes} minutes, "
+            f"possible denial-of-service attempt or application fault"
         )
 
 

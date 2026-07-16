@@ -1,7 +1,7 @@
 """
 Shared pytest fixtures.
 
-Tests run against a real Postgres database (not mocks) — the detectors'
+Tests run against a real Postgres database (not mocks), the detectors'
 whole job is correct SQL aggregation (GROUP BY/HAVING, distinct counts),
 so mocking the ORM would test nothing meaningful. Each test gets a fresh
 schema, created and torn down per test function, so tests never interfere
@@ -40,7 +40,7 @@ def _resolve_test_database_url() -> str:
         return f"{base}/{TEST_DB_NAME}"
 
     raise RuntimeError(
-        "Neither TEST_DATABASE_URL nor DATABASE_URL is set — cannot determine "
+        "Neither TEST_DATABASE_URL nor DATABASE_URL is set, cannot determine "
         "which database to run tests against."
     )
 

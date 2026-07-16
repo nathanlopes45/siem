@@ -31,7 +31,7 @@ class LogIngest(BaseModel):
 
 @app.get("/")
 def root():
-    """Left unauthenticated on purpose — a basic liveness check for
+    """Left unauthenticated on purpose, a basic liveness check for
     orchestration/monitoring tools shouldn't require a secret."""
     return {"status": "SIEM backend running with database connected"}
 
@@ -122,7 +122,7 @@ def get_alerts(limit: Optional[int] = Query(100), db: Session = Depends(get_db))
 @app.post("/detect/{host_id}", dependencies=[Depends(require_api_key)])
 def trigger_detection(host_id: UUID, db: Session = Depends(get_db)):
     """
-    Manual trigger for detection on a single host — useful for testing/demos
+    Manual trigger for detection on a single host, useful for testing/demos
     so you don't have to wait for the worker's poll interval. The worker
     still runs this automatically in the background on its own schedule.
     """
@@ -134,7 +134,7 @@ def trigger_detection(host_id: UUID, db: Session = Depends(get_db)):
 def trigger_cross_host_detection(db: Session = Depends(get_db)):
     """
     Manual trigger for the fleet-wide cross-host correlation rule. Same
-    testing/demo rationale as /detect/{host_id} — the worker runs this
+    testing/demo rationale as /detect/{host_id}, the worker runs this
     automatically every cycle regardless.
     """
     detect_cross_host_correlation(db)
@@ -146,7 +146,7 @@ def triage_alert(alert_id: UUID, db: Session = Depends(get_db)):
     """
     LLM-assisted triage: sends the alert plus its related raw log lines to
     Claude and asks for a plain-English summary, a severity rating, and a
-    recommended next step. Purely advisory — this never takes action on its
+    recommended next step. Purely advisory, this never takes action on its
     own, it only writes the summary/severity back onto the alert for a
     human to read. Triggered on demand rather than automatically on every
     alert, to keep LLM API usage opt-in and predictable.
@@ -187,7 +187,7 @@ def triage_alert(alert_id: UUID, db: Session = Depends(get_db)):
 def investigate_alert(alert_id: UUID, db: Session = Depends(get_db)):
     """
     Agentic investigation: unlike /triage (one prompt, one answer), this
-    runs a bounded ReAct loop — the model decides which read-only tools to
+    runs a bounded ReAct loop, the model decides which read-only tools to
     call (recent logs, threat intel, cross-host activity, host info),
     observes results, and repeats before concluding. The full reasoning
     trace is persisted to AgentInvestigation for auditability, not just
@@ -213,7 +213,7 @@ def investigate_alert(alert_id: UUID, db: Session = Depends(get_db)):
     )
     db.add(investigation)
 
-    # Same fields as /triage updates — so the dashboard chip/panel logic
+    # Same fields as /triage updates, so the dashboard chip/panel logic
     # doesn't need to know or care whether an alert was assessed by the
     # simple triage path or the full agent path.
     if result["severity"]:
@@ -243,7 +243,7 @@ def investigate_alert(alert_id: UUID, db: Session = Depends(get_db)):
 @app.get("/alerts/{alert_id}/investigations", dependencies=[Depends(require_api_key)])
 def get_investigations(alert_id: UUID, db: Session = Depends(get_db)):
     """Returns past agent investigations for an alert, most recent first,
-    including the full reasoning trace — used by the dashboard to render
+    including the full reasoning trace, used by the dashboard to render
     the "view agent trace" panel."""
     rows = (
         db.query(models.AgentInvestigation)
@@ -271,7 +271,7 @@ def get_investigations(alert_id: UUID, db: Session = Depends(get_db)):
 @app.get("/dashboard")
 def dashboard():
     """
-    Serves the static dashboard shell. Unauthenticated on purpose — it's
+    Serves the static dashboard shell. Unauthenticated on purpose, it's
     just HTML/CSS/JS with no data baked in. Every actual data request the
     page makes goes through the normal authenticated JSON endpoints below,
     with the API key entered client-side and never sent anywhere but this
@@ -311,7 +311,7 @@ def stats_log_volume(hours: int = Query(6, ge=1, le=168), db: Session = Depends(
     """
     Buckets log ingestion into 10-minute windows over the requested lookback
     period, using Postgres's date_bin (14+) so the bucketing happens in the
-    database rather than in a Python loop — same principle as the detection
+    database rather than in a Python loop, same principle as the detection
     engine's aggregation queries.
     """
     since = datetime.utcnow() - timedelta(hours=hours)

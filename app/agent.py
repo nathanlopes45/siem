@@ -1,9 +1,9 @@
 """
-Agentic alert investigation — a hand-rolled ReAct (Reasoning + Acting) loop.
+Agentic alert investigation, a hand-rolled ReAct (Reasoning + Acting) loop.
 
 Unlike triage.py (a single prompt -> single JSON answer), this lets the
 model decide what additional context it needs, call read-only tools to
-fetch it, observe the results, and decide again — repeating until it has
+fetch it, observe the results, and decide again, repeating until it has
 enough information to conclude, or it hits a hard iteration cap.
 
 Design principles, stated explicitly because they matter for a security
@@ -12,15 +12,15 @@ tool specifically:
     action (block an IP, kill a process, modify data) on its own. Giving
     an LLM agent write/destructive capability in a security context is a
     real risk surface; this agent is investigation-only by design.
-  - Bounded iterations (MAX_ITERATIONS) — no possibility of a runaway
+  - Bounded iterations (MAX_ITERATIONS), no possibility of a runaway
     loop burning time or tokens indefinitely.
-  - Full trace persisted (see models.AgentInvestigation) — every thought,
+  - Full trace persisted (see models.AgentInvestigation), every thought,
     tool call, and observation is stored, not just the final answer. An
     analyst (or you, in an interview) can see exactly how the agent got
     to its conclusion, not just trust it blindly.
   - Falls back to the existing single-shot triage (triage.generate_triage)
     if the agent can't produce a valid Final Answer within the iteration
-    cap — small local models aren't always reliable at strict output
+    cap, small local models aren't always reliable at strict output
     formats, so this needs a safety net rather than failing outright.
 """
 
@@ -42,7 +42,7 @@ logger = logging.getLogger("siem-agent")
 
 OLLAMA_URL = os.getenv("OLLAMA_URL", "http://ollama:11434")
 # Agent reasoning is a harder task than single-shot classification, so it's
-# configurable separately from the triage model — bump this to a larger
+# configurable separately from the triage model, bump this to a larger
 # local model (e.g. llama3.2:3b) if the smaller default is unreliable at
 # following the Thought/Action format.
 OLLAMA_AGENT_MODEL = os.getenv("OLLAMA_AGENT_MODEL", os.getenv("OLLAMA_MODEL", "llama3.2:1b"))
@@ -51,7 +51,7 @@ MAX_ITERATIONS = 5
 
 
 # ---------------------------------------------------------------------------
-# Tools — every one is read-only. Each takes (db, **kwargs) and returns a
+# Tools, every one is read-only. Each takes (db, **kwargs) and returns a
 # JSON-serializable dict. Add new tools here + in TOOL_REGISTRY + the
 # system prompt's tool list to extend the agent's capabilities.
 # ---------------------------------------------------------------------------
@@ -95,7 +95,7 @@ TOOL_REGISTRY = {
     "get_host_info": tool_get_host_info,
 }
 
-SYSTEM_PROMPT = """You are a SOC analyst agent investigating a security alert. You have read-only tools to gather more context before concluding — you cannot take any action, only look.
+SYSTEM_PROMPT = """You are a SOC analyst agent investigating a security alert. You have read-only tools to gather more context before concluding, you cannot take any action, only look.
 
 Available tools:
 - get_recent_logs(host_id, event_type, limit): recent raw log lines for a host, optionally filtered by event_type (e.g. failed_password, http_4xx)
@@ -115,11 +115,11 @@ Thought: <your final reasoning>
 Final Answer: <a single-line JSON object with keys: summary (2-3 sentences), severity (one of: low, medium, high, critical), recommended_action (one short concrete step), key_evidence (a list of short strings)>
 
 Rules:
-- Respond with EXACTLY ONE Thought/Action pair OR ONE Thought/Final Answer per response. Never write more than one Action, and never write an Action and a Final Answer in the same response — stop immediately after your single Action so you can see its real result before deciding what to do next.
-- Before giving a Final Answer, use at least one tool to check something concrete (recent logs, threat intel, or cross-host activity) rather than concluding from the alert description alone — the whole point of investigating is verifying, not guessing.
+- Respond with EXACTLY ONE Thought/Action pair OR ONE Thought/Final Answer per response. Never write more than one Action, and never write an Action and a Final Answer in the same response, stop immediately after your single Action so you can see its real result before deciding what to do next.
+- Before giving a Final Answer, use at least one tool to check something concrete (recent logs, threat intel, or cross-host activity) rather than concluding from the alert description alone. The whole point of investigating is verifying, not guessing.
 - Only call a tool when it would genuinely change your conclusion. Do not call more than 4 tools total.
-- Base every conclusion strictly on the alert data and tool outputs you actually received — never invent hosts, IPs, users, or events.
-- Never suggest or imply taking any destructive action (blocking, banning, deleting) — you are investigation-only. recommended_action should describe what a human analyst should look into or do next.
+- Base every conclusion strictly on the alert data and tool outputs you actually received, never invent hosts, IPs, users, or events.
+- Never suggest or imply taking any destructive action (blocking, banning, deleting), you are investigation-only. recommended_action should describe what a human analyst should look into or do next.
 """
 
 ACTION_NAME_RE = re.compile(r"Action:\s*([A-Za-z_][A-Za-z0-9_]*)")
@@ -129,7 +129,7 @@ KEY_VALUE_RE = re.compile(r"(\w+)\s*[=:]\s*['\"]?([^,'\")\n]+)['\"]?")
 
 def _extract_json_object(text: str) -> Optional[dict]:
     """Finds the first {...} blob anywhere in text and parses it. Small
-    models sometimes wrap it in extra prose despite instructions not to —
+    models sometimes wrap it in extra prose despite instructions not to,
     searching rather than requiring an exact match is more forgiving."""
     if match := JSON_OBJECT_RE.search(text):
         try:
@@ -143,7 +143,7 @@ def _repair_truncated_json(text: str) -> Optional[dict]:
     """
     Handles a specific, common failure mode: the model's response gets cut
     off mid-object (e.g. a "num_predict" limit hit right after the last
-    field, before the closing brace) — the JSON is otherwise complete and
+    field, before the closing brace), the JSON is otherwise complete and
     valid, just missing however many closing brackets/braces it needs.
     Rather than discarding an answer that's 95% there, count what's unclosed
     and append it, then retry parsing.
@@ -157,7 +157,7 @@ def _repair_truncated_json(text: str) -> Optional[dict]:
     open_brackets = snippet.count("[") - snippet.count("]")
     open_braces = snippet.count("{") - snippet.count("}")
     if open_brackets < 0 or open_braces < 0:
-        return None  # more closes than opens — not a simple truncation, don't guess
+        return None  # more closes than opens, not a simple truncation, don't guess
 
     repaired = snippet + ("]" * open_brackets) + ("}" * open_braces)
     try:
@@ -170,7 +170,7 @@ def _extract_key_value_pairs(text: str) -> dict:
     """
     Fallback for when a model writes arguments as key=value or key: value
     pairs instead of valid JSON (e.g. "check_threat_intel(ip=1.2.3.4)" or
-    a Final Answer missing its enclosing braces) — salvages what it can
+    a Final Answer missing its enclosing braces), salvages what it can
     rather than discarding a mostly-sensible response outright.
     """
     return {k: v.strip() for k, v in KEY_VALUE_RE.findall(text)}
@@ -189,7 +189,7 @@ def _parse_action(reply: str) -> Optional[tuple]:
     tool_name = name_match.group(1)
 
     # Everything after the tool name, through the end of the reply (or the
-    # next Thought/Action/Final Answer marker) is fair game for arguments —
+    # next Thought/Action/Final Answer marker) is fair game for arguments,
     # covers both a same-line "(args)" and a separate "Action Input:" line.
     remainder = reply[name_match.end():]
     cutoff = re.search(r"\n\s*(Thought:|Action:|Final Answer:)", remainder)
@@ -218,7 +218,7 @@ def _parse_final_answer(reply: str) -> Optional[dict]:
     if repaired := _repair_truncated_json(segment):
         return repaired
 
-    # No valid or repairable JSON found — salvage individual fields instead
+    # No valid or repairable JSON found, salvage individual fields instead
     # of discarding an otherwise-reasonable answer just because it's missing
     # a brace or a stray quote.
     salvaged = _extract_key_value_pairs(segment)
@@ -234,7 +234,7 @@ def _first_marker(reply: str) -> str:
     Small models sometimes ignore the "one action per turn" instruction and
     write several fabricated Thought/Action/Observation-shaped blocks in a
     SINGLE response, ending with a Final Answer based on tool results it
-    never actually received — it's pattern-completing what a full ReAct
+    never actually received, it's pattern-completing what a full ReAct
     transcript looks like rather than genuinely pausing to wait for a real
     observation. Checking "is there a Final Answer anywhere" before "is
     there an earlier Action" would let that fabricated ending win. Instead,
@@ -262,7 +262,7 @@ def _call_ollama_chat(messages: list) -> str:
             "stream": False,
             # Final Answer JSON (summary + severity + recommended_action +
             # key_evidence) can run long enough to hit a default output cap
-            # and get truncated mid-object — give it real headroom.
+            # and get truncated mid-object, give it real headroom.
             "options": {"num_predict": 600},
         },
         timeout=REQUEST_TIMEOUT_SECONDS,
@@ -276,7 +276,7 @@ def run_agent_investigation(db: Session, alert: models.Alert) -> dict:
     Runs the ReAct loop for a single alert. Returns a dict with:
     summary, severity, recommended_action, key_evidence, trace (list of
     step dicts), tools_used (list of tool names), iterations (int),
-    fell_back (bool — True if we had to use the simple triage fallback).
+    fell_back (bool, True if we had to use the simple triage fallback).
     """
     trace = []
     tools_used = []
@@ -335,7 +335,7 @@ def run_agent_investigation(db: Session, alert: models.Alert) -> dict:
                 trace.append({"type": "action", "tool": tool_name, "input": tool_input})
                 trace.append({"type": "observation", "content": observation})
 
-                # Deliberately do NOT echo the model's full raw reply back —
+                # Deliberately do NOT echo the model's full raw reply back,
                 # it may contain fabricated later steps (see _first_marker).
                 # Only the genuine action + a real observation go back in,
                 # which is also what keeps the model anchored to reality
@@ -347,7 +347,7 @@ def run_agent_investigation(db: Session, alert: models.Alert) -> dict:
                 messages.append({"role": "user", "content": f"Observation: {json.dumps(observation)}"})
                 continue
 
-        # Model didn't follow either format, or parsing failed — nudge it
+        # Model didn't follow either format, or parsing failed, nudge it
         # once rather than giving up immediately, since small local models
         # sometimes need a reminder to stay in format.
         messages.append({"role": "assistant", "content": reply})

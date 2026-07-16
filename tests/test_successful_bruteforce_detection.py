@@ -1,5 +1,5 @@
 """
-Tests for detect_successful_bruteforce — this is the detector that had a
+Tests for detect_successful_bruteforce, this is the detector that had a
 real bug fixed during development (it used to only check the LAST
 successful-login IP seen, silently missing earlier ones). These tests
 guard against that regression.

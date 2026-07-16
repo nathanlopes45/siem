@@ -50,7 +50,7 @@ def test_does_not_duplicate_alert_on_rerun(db_session, make_host, make_log):
         make_log(host.id, event_type="failed_password", attacker_ip="1.2.3.4")
 
     detect_bruteforce(db_session, host.id)
-    detect_bruteforce(db_session, host.id)  # run again — should not create a second alert
+    detect_bruteforce(db_session, host.id)  # run again, should not create a second alert
 
     alerts = db_session.query(models.Alert).filter(
         models.Alert.host_id == host.id, models.Alert.alert_type == "Brute Force Attempt"

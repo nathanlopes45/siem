@@ -1,5 +1,5 @@
 """
-Tests for detect_web_scanning and detect_error_spike — the two detectors
+Tests for detect_web_scanning and detect_error_spike, the two detectors
 added for web access log support alongside the existing SSH-focused ones.
 """
 
@@ -77,7 +77,7 @@ def test_error_spike_does_not_fire_below_threshold(db_session, make_host, make_l
 
 
 def test_error_spike_counts_across_all_ips_not_per_ip(db_session, make_host, make_log):
-    """Unlike web scanning, the error spike detector is host-wide — it
+    """Unlike web scanning, the error spike detector is host-wide, it
     should fire from many DIFFERENT ips each sending a few 5xx, not just
     one IP sending many."""
     host = make_host()

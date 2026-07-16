@@ -245,7 +245,7 @@
 
   /* Estimated = heuristic guess from alert type, before AI triage has run.
      Outlined/dashed instead of filled, so it reads as "unconfirmed" rather
-     than a solid assessment — avoids the confusing appearance of severity
+     than a solid assessment, avoids the confusing appearance of severity
      "changing" when triage later gives a real, possibly different rating. */
   .sev-chip.estimated {
     background: transparent;
@@ -550,26 +550,26 @@
 </header>
 
 <div class="pulse-strip-wrap">
-  <div class="pulse-strip-label">Alert activity — last hour</div>
+  <div class="pulse-strip-label">Alert activity, last hour</div>
   <svg id="pulseSvg" viewBox="0 0 1000 56" preserveAspectRatio="none"></svg>
 </div>
 
 <div class="stats-row">
   <div class="stat-item">
     <div class="stat-eyebrow">Hosts</div>
-    <div class="stat-value" id="statHosts">—</div>
+    <div class="stat-value" id="statHosts">-</div>
   </div>
   <div class="stat-item">
     <div class="stat-eyebrow">Logs Ingested</div>
-    <div class="stat-value" id="statLogs">—</div>
+    <div class="stat-value" id="statLogs">-</div>
   </div>
   <div class="stat-item">
     <div class="stat-eyebrow">Total Alerts</div>
-    <div class="stat-value" id="statAlerts">—</div>
+    <div class="stat-value" id="statAlerts">-</div>
   </div>
   <div class="stat-item">
     <div class="stat-eyebrow">Alerts (24h)</div>
-    <div class="stat-value accent" id="stat24h">—</div>
+    <div class="stat-value accent" id="stat24h">-</div>
   </div>
 </div>
 
@@ -598,7 +598,7 @@
 </main>
 
 <section class="volume-section">
-  <div class="panel-title" style="padding-left:0"><span>Log Volume — last 6h</span></div>
+  <div class="panel-title" style="padding-left:0"><span>Log Volume, last 6h</span></div>
   <canvas id="volumeChart"></canvas>
 </section>
 
@@ -672,7 +672,7 @@ function parseISO(iso) {
   // Some columns are timezone-naive (no offset in their ISO string, needs
   // "Z" appended) and some are timezone-aware (already end in +00:00 or
   // similar). Blindly appending "Z" to an already-offset string produces
-  // an invalid date string — this checks first.
+  // an invalid date string, this checks first.
   if (!iso) return null;
   const hasOffset = /[+-]\d\d:\d\d$/.test(iso) || iso.endsWith("Z");
   return new Date(hasOffset ? iso : iso + "Z");
@@ -680,7 +680,7 @@ function parseISO(iso) {
 
 function relTime(iso) {
   const d = parseISO(iso);
-  if (!d) return "—";
+  if (!d) return "-";
   const s = Math.floor((Date.now() - d.getTime()) / 1000);
   if (s < 60) return `${s}s ago`;
   if (s < 3600) return `${Math.floor(s / 60)}m ago`;
@@ -736,7 +736,7 @@ function renderAlerts() {
   }
 
   if (alerts.length === 0) {
-    list.innerHTML = `<div class="empty-state">No alerts${activeFilter ? " matching this filter" : " yet — ingest some logs to see detections appear here"}.</div>`;
+    list.innerHTML = `<div class="empty-state">No alerts${activeFilter ? " matching this filter" : " yet, ingest some logs to see detections appear here"}.</div>`;
     return;
   }
 
@@ -745,7 +745,7 @@ function renderAlerts() {
     const estimated = isEstimatedSeverity(a);
     const chipLabel = estimated ? `~${sev}` : sev;
     const chipTitle = estimated
-      ? "Estimated from alert type — run AI triage for a confirmed assessment"
+      ? "Estimated from alert type, run AI triage for a confirmed assessment"
       : "Confirmed by AI triage";
     return `
       <div class="alert-row sev-${sev}" data-id="${a.id}">
@@ -771,7 +771,7 @@ function renderAlerts() {
 
   // Restore whichever panel was open before this re-render (post-triage
   // update or periodic auto-refresh) instead of silently collapsing it.
-  // shouldScroll=false here — this is a passive restore, not a fresh user
+  // shouldScroll=false here, this is a passive restore, not a fresh user
   // click, so the page shouldn't jump.
   if (expandedAlertId) {
     const stillVisible = alerts.find(a => a.id === expandedAlertId);
@@ -828,7 +828,7 @@ function renderDetailForAlert(id, alert) {
         <button class="triage-btn" id="triage-btn-${id}">Quick Triage</button>
         <button class="triage-btn agent-btn" id="agent-btn-${id}">Investigate (Agent)</button>
       </div>
-      <div class="assess-hint">Quick Triage: one model call, fast. Investigate: multi-step agent that pulls related logs, threat intel, and cross-host activity before concluding — slower, more thorough.</div>
+      <div class="assess-hint">Quick Triage: one model call, fast. Investigate: multi-step agent that pulls related logs, threat intel, and cross-host activity before concluding. Slower, more thorough.</div>
     `;
     detail.querySelector(`#triage-btn-${id}`).addEventListener("click", (e) => {
       e.stopPropagation();
@@ -859,7 +859,7 @@ function updateElapsed(id, startedAt) {
     if (elapsedTickInterval) { clearInterval(elapsedTickInterval); elapsedTickInterval = null; }
     return;
   }
-  el.textContent = ` — ${Math.floor((Date.now() - startedAt) / 1000)}s`;
+  el.textContent = `, ${Math.floor((Date.now() - startedAt) / 1000)}s`;
 }
 
 async function startAssessment(id, kind, label) {
@@ -879,9 +879,9 @@ async function startAssessment(id, kind, label) {
     });
 
     delete assessmentInFlight[id];
-    delete cachedTraces[id]; // invalidate — a new investigation may have just been run
+    delete cachedTraces[id]; // invalidate, a new investigation may have just been run
 
-    // Always mutate whatever the CURRENT alert object is for this id —
+    // Always mutate whatever the CURRENT alert object is for this id,
     // cachedAlerts may have been fully replaced by an auto-refresh while
     // this request was in flight.
     const current = cachedAlerts.find(a => a.id === id);
@@ -896,7 +896,7 @@ async function startAssessment(id, kind, label) {
     delete assessmentInFlight[id];
     const detailEl = document.getElementById("detail-" + id);
     if (detailEl) {
-      detailEl.innerHTML = `<button class="triage-btn" id="retry-btn-${id}">${kind === "investigate" ? "Investigation" : "Triage"} failed — retry</button>`;
+      detailEl.innerHTML = `<button class="triage-btn" id="retry-btn-${id}">${kind === "investigate" ? "Investigation" : "Triage"} failed, retry</button>`;
       detailEl.querySelector("button").addEventListener("click", (e) => {
         e.stopPropagation();
         startAssessment(id, kind, label);
@@ -925,7 +925,7 @@ function wireTraceToggle(id) {
   });
 
   // Restore trace-panel-open state after any rebuild (post-triage update
-  // or the 10s auto-refresh) — without this, the trace silently collapses
+  // or the 10s auto-refresh), without this, the trace silently collapses
   // a few seconds after opening, exactly like the outer alert panel did
   // before that was fixed.
   if (traceOpenForAlertId === id) {
@@ -951,7 +951,7 @@ async function showTracePanel(id) {
   if (cachedTraces[id]) {
     container.innerHTML = cachedTraces[id].length
       ? renderTrace(cachedTraces[id][0])
-      : `<div class="trace-loading">No agent investigation has been run for this alert yet — click "Investigate (Agent)" above.</div>`;
+      : `<div class="trace-loading">No agent investigation has been run for this alert yet, click "Investigate (Agent)" above.</div>`;
     return;
   }
 
@@ -963,7 +963,7 @@ async function showTracePanel(id) {
     cachedTraces[id] = investigations;
     container.innerHTML = investigations.length
       ? renderTrace(investigations[0])
-      : `<div class="trace-loading">No agent investigation has been run for this alert yet — click "Investigate (Agent)" above.</div>`;
+      : `<div class="trace-loading">No agent investigation has been run for this alert yet, click "Investigate (Agent)" above.</div>`;
   } catch (err) {
     container.innerHTML = `<div class="trace-loading">Could not load trace.</div>`;
   }
@@ -1003,7 +1003,7 @@ function renderTriageBlock(alert, id) {
       <div class="label">Summary</div>
       <div>${alert.triage_summary}</div>
       <div class="label">Recommended Action</div>
-      <div>${alert.recommended_action || "—"}</div>
+      <div>${alert.recommended_action || "-"}</div>
     </div>
     <div class="trace-toggle" id="trace-toggle-${id}">View agent reasoning trace ▾</div>
     <div class="trace-container" id="trace-container-${id}"></div>
@@ -1047,7 +1047,7 @@ function renderBreakdown(alerts) {
     return;
   }
 
-  // Computed live from the actual alert objects — each one's severity()
+  // Computed live from the actual alert objects, each one's severity()
   // uses the real, AI-confirmed severity if triage has run, or the
   // heuristic estimate otherwise. This is why triaging an alert now
   // immediately updates this chart instead of it staying frozen on a
@@ -1093,7 +1093,7 @@ function renderBreakdown(alerts) {
         onClick: (evt, elements) => {
           if (!elements.length) return;
           const idx = elements[0].index;
-          // Read from typeChart.data.labels, NOT the outer `labels` const —
+          // Read from typeChart.data.labels, NOT the outer `labels` const,
           // that const is a snapshot from whenever this chart was first
           // created, and every .update() call since then changed the
           // chart's real data without this closure knowing. Reading from
@@ -1138,7 +1138,7 @@ function renderVolume(rows) {
     return;
   }
 
-  // Bar chart, not a smoothed line — each bar is one real 10-minute bucket
+  // Bar chart, not a smoothed line, each bar is one real 10-minute bucket
   // from the API. A curved line can visually imply values *between*
   // buckets that don't exist; bars are a literal, unambiguous read.
   volumeChart = new Chart(ctx, {

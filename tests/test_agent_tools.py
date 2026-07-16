@@ -1,5 +1,5 @@
 """
-Tests for the agent's tools (app/agent.py) — the read-only functions the
+Tests for the agent's tools (app/agent.py), the read-only functions the
 ReAct loop calls. These are pure DB queries, so they're tested directly
 and deterministically, same as the detection logic. The LLM reasoning
 loop itself is NOT unit tested here, for the same reason detection logic

@@ -1,6 +1,6 @@
 """
 Tests for the syslog listener's core ingestion logic (app/syslog_listener.py).
-The actual UDP socket plumbing isn't tested here — same philosophy as the
+The actual UDP socket plumbing isn't tested here, same philosophy as the
 detection/agent tool tests: test the deterministic logic that the socket
 handler delegates to, not the I/O itself.
 """

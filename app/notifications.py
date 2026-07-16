@@ -33,7 +33,7 @@ def _build_payload(alert_type: str, description: str, host_id: Optional[UUID]) -
 
 def send_alert_notification(alert_type: str, description: str, host_id: Optional[UUID] = None):
     if not ALERT_WEBHOOK_URL:
-        return  # notifications not configured — silently no-op, this is optional
+        return  # notifications not configured, silently no-op, this is optional
 
     try:
         response = requests.post(

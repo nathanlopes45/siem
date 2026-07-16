@@ -92,7 +92,7 @@ def parse_ssh_log(raw_log: str) -> ParsedLog:
 def parse_web_log(raw_log: str) -> ParsedLog:
     """
     Parses Apache/Nginx Combined Log Format lines. Buckets event_type by
-    status class (http_2xx/3xx/4xx/5xx) rather than the exact status code —
+    status class (http_2xx/3xx/4xx/5xx) rather than the exact status code,
     this keeps detection queries as fast indexed equality lookups on
     event_type (same pattern as the SSH parser), while the exact code is
     still preserved separately in http_status for display/detail.
@@ -117,7 +117,7 @@ def parse_web_log(raw_log: str) -> ParsedLog:
 
 
 def _generic_fallback(raw_log: str) -> ParsedLog:
-    """Used for unrecognized sources/formats — still grabs an IP if present."""
+    """Used for unrecognized sources/formats, still grabs an IP if present."""
     match = GENERIC_IP_RE.search(raw_log)
     return {
         "event_type": "unknown",

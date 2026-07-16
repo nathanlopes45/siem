@@ -1,12 +1,12 @@
 """
-LLM-assisted alert triage — powered by a locally-run, open-source model
+LLM-assisted alert triage, powered by a locally-run, open-source model
 via Ollama. No API key, no per-token cost, and no security log data ever
 leaves this machine (a real consideration for a security tool: sending
 alert/log content to a third-party API is itself worth scrutinizing).
 
 Given an alert plus the raw log lines that triggered it, asks the local
 model for a plain-English summary, a severity rating, and a recommended
-next step. Purely advisory — never modifies alerts, takes action, or
+next step. Purely advisory, never modifies alerts, takes action, or
 blocks/allows anything by itself.
 
 Triage is triggered on demand (POST /alerts/{id}/triage), not automatically
@@ -23,7 +23,7 @@ logger = logging.getLogger("siem-triage")
 
 OLLAMA_URL = os.getenv("OLLAMA_URL", "http://ollama:11434")
 OLLAMA_MODEL = os.getenv("OLLAMA_MODEL", "llama3.2:1b")
-REQUEST_TIMEOUT_SECONDS = 60  # local CPU inference is slower than a hosted API — be generous
+REQUEST_TIMEOUT_SECONDS = 60  # local CPU inference is slower than a hosted API, be generous
 
 VALID_SEVERITIES = {"low", "medium", "high", "critical"}
 FALLBACK_SEVERITY = "medium"  # used only if the model's JSON is missing/invalid severity
@@ -32,7 +32,7 @@ SYSTEM_PROMPT = (
     "You are a SOC analyst assistant. You will be given a security alert "
     "and the raw log lines that triggered it. Produce a concise triage "
     "summary for a human analyst. Base your response ONLY on the data "
-    "provided — never invent hosts, IPs, users, or events not present in "
+    "provided, never invent hosts, IPs, users, or events not present in "
     "the input. Respond with ONLY a JSON object, no markdown fences, no "
     "preamble, in exactly this shape:\n"
     '{"summary": "2-3 plain-English sentences", '
@@ -48,7 +48,7 @@ def _normalize_severity(value) -> str:
     something outside the expected set, even while returning otherwise
     valid JSON (so this isn't caught as an error). Without this, an alert
     could silently end up with severity=None despite triage "succeeding"
-    — which permanently keeps the dashboard's estimated/unconfirmed chip
+   , which permanently keeps the dashboard's estimated/unconfirmed chip
     styling even though a real triage was run. Normalizing here means
     every successful call produces a real, valid severity.
     """

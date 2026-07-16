@@ -41,7 +41,7 @@ class RawLog(Base):
     __table_args__ = (
         Index("ix_rawlog_host_received", "host_id", "received_at"),
         Index("ix_rawlog_attacker_ip", "attacker_ip"),
-        # speeds up "failed_password logs for this host" — now an equality
+        # speeds up "failed_password logs for this host", now an equality
         # lookup instead of the old leading-wildcard ilike scan
         Index("ix_rawlog_host_event_type", "host_id", "event_type"),
         # supports detect_cross_host_correlation, which groups by
@@ -59,7 +59,7 @@ class Alert(Base):
     description = Column(String, nullable=False)
     created_at = Column(DateTime, default=datetime.utcnow)
 
-    # Populated on demand via POST /alerts/{id}/triage — null until triaged
+    # Populated on demand via POST /alerts/{id}/triage, null until triaged
     triage_summary = Column(Text, nullable=True)
     severity = Column(String, nullable=True)
     recommended_action = Column(Text, nullable=True)
@@ -71,7 +71,7 @@ class Alert(Base):
 
 class AgentInvestigation(Base):
     """
-    Full audit trail for a single agent investigation run — every thought,
+    Full audit trail for a single agent investigation run, every thought,
     tool call, and observation, not just the final answer. Separate from
     Alert (which only stores the latest severity/summary/recommended_action,
     same fields whether they came from simple triage or a full agent run)

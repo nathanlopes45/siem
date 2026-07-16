@@ -32,10 +32,10 @@ def run_detection_cycle():
         for host_id in host_ids:
             run_all_detections(db, host_id)
 
-        # Not host-scoped — runs once per cycle across all hosts, not once per host
+        # Not host-scoped, runs once per cycle across all hosts, not once per host
         detect_cross_host_correlation(db)
 
-        logger.info(f"Detection cycle complete — checked {len(host_ids)} host(s)")
+        logger.info(f"Detection cycle complete, checked {len(host_ids)} host(s)")
     except Exception:
         logger.exception("Detection cycle failed")
     finally:

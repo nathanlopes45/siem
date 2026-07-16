@@ -1,11 +1,11 @@
 """
-Real syslog ingestion — a UDP listener on port 514 (the standard syslog
+Real syslog ingestion, a UDP listener on port 514 (the standard syslog
 port), so this SIEM can receive logs the way a real one does: pushed from
 an actual box (e.g. via rsyslog's @@host:514 forwarding, or the `logger`
 command), not only hand-crafted JSON POSTed via curl.
 
 Runs as its own container/process, same architectural pattern as
-app/worker.py — writes directly to the database rather than going through
+app/worker.py, writes directly to the database rather than going through
 the HTTP API, since it's an internal, trusted service on the same Docker
 network.
 
@@ -30,7 +30,7 @@ logger = logging.getLogger("siem-syslog")
 
 SYSLOG_PORT = int(os.getenv("SYSLOG_PORT", "514"))
 # Which parser to apply to incoming lines. Real syslog auth traffic is
-# overwhelmingly SSH/auth in a lab setup like this one — see app/parsers.py
+# overwhelmingly SSH/auth in a lab setup like this one, see app/parsers.py
 # to add source-specific dispatch if you start forwarding other formats.
 DEFAULT_LOG_SOURCE = os.getenv("SYSLOG_DEFAULT_SOURCE", "sshd")
 

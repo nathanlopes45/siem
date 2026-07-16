@@ -3,7 +3,7 @@ Minimal API key authentication.
 
 A single shared secret, read from the environment, required on every
 request via the X-API-Key header. This is intentionally simple (no user
-accounts, no JWT) — appropriate for a single-operator SIEM lab, and still
+accounts, no JWT), appropriate for a single-operator SIEM lab, and still
 a real, correctly-implemented access control rather than none at all.
 """
 
