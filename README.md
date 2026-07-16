@@ -1,10 +1,24 @@
 # SIEM — A Hands-On Security Information & Event Management Lab
 
+[![CI](https://github.com/nathanlopes45/siem/actions/workflows/ci.yml/badge.svg)](https://github.com/nathanlopes45/siem/actions/workflows/ci.yml)
+
 A custom-built SIEM backend that ingests logs, correlates events, and raises alerts on suspicious activity — built from scratch to understand how detection engineering actually works under the hood, rather than just operating someone else's tool.
 
 ## Why this project exists
 
 Most SIEM experience on a resume comes from clicking around Splunk or Sentinel dashboards. This project goes one layer deeper: designing the log schema, writing the correlation logic, and reasoning about detection tradeoffs (false positives, alert fatigue, time-window sizing, ingestion vs. detection latency) myself.
+
+<!--
+  Screenshot goes here — this is the single highest-leverage thing to add
+  to this README. Most reviewers will not clone and run the project; a
+  screenshot is often the only thing that actually gets looked at.
+
+  To capture one: open http://localhost:8000/dashboard with some alerts
+  populated (see "Getting started" below), take a screenshot, save it to
+  docs/dashboard-screenshot.png in this repo, then replace this comment
+  with:
+  ![Dashboard screenshot](docs/dashboard-screenshot.png)
+-->
 
 ## Architecture
 
@@ -135,6 +149,24 @@ curl -X POST "http://localhost:8000/logs" \
 
 Unrecognized `log_source` values fall back to a generic parser that still extracts an IP if present, so ingestion never fails outright on an unfamiliar format — it just won't get full structured extraction.
 
+### Real syslog ingestion (UDP)
+
+Beyond the HTTP API, the SIEM also runs a real syslog listener on UDP port 514 (`app/syslog_listener.py`, its own container) — so logs can be pushed the way a real syslog daemon forwards them (`rsyslog`'s `@@host:514`, the standard `logger` command, etc.), not only sent as hand-crafted JSON via curl.
+
+**How it attributes messages to a host**: by exact match of the UDP packet's source IP against a registered `Host.ip_address`. This is a deliberate simplification appropriate for a lab setup with a small number of known hosts — a production-grade receiver would need more robust source identification (TLS client certs, structured syslog headers with an explicit hostname field). Messages from unregistered source IPs are logged and dropped rather than silently misattributed.
+
+To test it, register a host with a real, reachable IP, then send it a message from that address:
+```bash
+curl -X POST "http://localhost:8000/hosts?hostname=syslog-test&ip_address=<YOUR_TEST_IP>&os_type=linux" -H "X-API-Key: $API_KEY"
+
+# from a machine at <YOUR_TEST_IP>:
+logger -n <SIEM_HOST> -P 514 -d "Failed password for root from 45.95.147.120 port 4444 ssh2"
+```
+Then confirm it landed:
+```bash
+curl "http://localhost:8000/logs?log_source=sshd" -H "X-API-Key: $API_KEY"
+```
+
 ### List hosts
 ```bash
 curl http://localhost:8000/hosts -H "X-API-Key: $API_KEY"
@@ -202,6 +234,46 @@ Same local, free Ollama backend as triage — configurable independently via `OL
 
 New alerts (not duplicates — only genuinely new findings) trigger a webhook POST if `ALERT_WEBHOOK_URL` is set in `.env`. This works out of the box with [Slack Incoming Webhooks](https://api.slack.com/messaging/webhooks): create one in your workspace, paste the URL into `.env`, and new alerts will post directly to a Slack channel. If the webhook isn't configured, or the request fails, notification is skipped silently — this can never block or break the detection engine itself.
 
+## Engineering Decisions
+
+A few deliberate tradeoffs worth calling out explicitly, since they came up while building this rather than being obvious upfront:
+
+- **Polling worker over a message queue (Celery/Redis).** Detection runs on a fixed 10-second poll instead of being event-driven. For this project's scale, a queue would add real infrastructure complexity (a broker, task serialization, worker pool management) for a latency improvement that doesn't matter here — logs aren't time-critical to the second. If detection needed to react in real time at production log volume, that tradeoff would flip.
+- **Local LLM (Ollama) over a hosted API.** Free and no per-request cost, but the more important reason for a security tool specifically: alert and log content never leaves the machine. Sending security telemetry to a third-party API is itself something worth scrutinizing in a real SOC context.
+- **Two different local models for two different tasks.** Single-shot triage uses `llama3.2:1b` (fast, the task is simple JSON classification). The agentic investigation loop uses `llama3.2:3b` — multi-step tool-calling reasoning is a harder task, and the smaller model was measurably less reliable at it (see the hand-rolled parser robustness below, which exists specifically because of this).
+- **Hand-rolled ReAct loop over a framework (LangChain, etc.).** More code to write, but it means every failure mode is one I actually debugged and fixed myself — including a real bug where a model could fabricate an entire fake tool-call transcript in one response and conclude on data it never actually retrieved. That bug, and the fix (only honoring whichever comes first, a genuine `Action` or a genuine `Final Answer`, discarding fabricated continuations), wouldn't have been visible or fixable the same way behind a framework abstraction.
+- **API key auth over full user accounts/JWT.** Right-sized for a single-operator lab. Constant-time comparison and fail-closed behavior are still real, correctly-implemented security properties, not just "any string works."
+- **Syslog host attribution by source IP, not by authenticated identity.** A known, documented simplification (see "Real syslog ingestion" above) — the honest tradeoff of building a real UDP listener without also building a full mutual-TLS syslog transport for a lab project.
+
+## Deploying it somewhere reachable
+
+Running this only on `localhost` means anyone evaluating it has to trust your README rather than clicking a link. A cheap VPS (DigitalOcean, Linode, a free-tier AWS/Oracle instance — $0-6/month) is enough, since this is already fully containerized.
+
+**Runbook:**
+
+1. **Provision a small VPS** (1-2 vCPU, 2-4GB RAM — the Ollama models need some headroom). Install Docker and Docker Compose on it.
+2. **Clone the repo, set up `.env`** exactly as in local setup, with a strong `API_KEY` and `POSTGRES_PASSWORD` (not the ones you used locally).
+3. **Lock down the firewall before exposing anything.** Only the reverse proxy port (443/80) should be reachable from the internet:
+   ```bash
+   ufw default deny incoming
+   ufw allow 22/tcp    # SSH
+   ufw allow 80/tcp
+   ufw allow 443/tcp
+   ufw enable
+   ```
+   Critically: **do not** expose `5432` (Postgres), `11434` (Ollama), or `514` (syslog) to the public internet. In `docker-compose.yml`, change those services' `ports:` mappings to bind only to localhost, e.g. `"127.0.0.1:5432:5432"`, or remove the host-port mapping entirely for services that don't need external access (`db` and `ollama` never need to be reachable from outside the Docker network at all — only `api` does, and `syslog` only if you're actually forwarding logs from an external box).
+4. **Put a reverse proxy in front with real TLS.** [Caddy](https://caddyfile.dev/) is the simplest option — it gets you free, auto-renewing HTTPS certs with about 4 lines of config:
+   ```
+   yourdomain.com {
+       reverse_proxy localhost:8000
+   }
+   ```
+   Running the dashboard over plain HTTP on a public IP means your API key travels in cleartext — worth avoiding even for a demo.
+5. **Point a domain (or subdomain) at it**, or just share the raw IP if you don't have one handy.
+6. **Regenerate all secrets** for the deployed instance rather than reusing local dev values — treat this the same as you would any other environment promotion.
+
+This is left as a runbook rather than something already done for you, since it requires access to a cloud account and DNS you control — but once done, it's a genuinely strong addition: a live, clickable link plus "hardened the deployment (firewall rules, no exposed DB/internal ports, TLS via Caddy)" is a concrete, specific thing to say in an interview.
+
 ## Security practices in this repo
 
 - No secrets committed — credentials are loaded from a gitignored `.env`, with `.env.example` as the template
@@ -240,6 +312,9 @@ A live signal dashboard at `http://localhost:8000/dashboard` — alert stream wi
 - [x] Automated test suite for detection logic
 - [x] Dashboard for visualizing alerts and log volume over time
 - [x] Support additional log source formats beyond SSH (web server access logs — Combined Log Format, with 404-scanning and error-spike detectors)
+- [x] Real syslog (UDP) ingestion, not only HTTP JSON
+- [x] CI pipeline (GitHub Actions): automated test suite + secret scanning on every push
+- [ ] Deployed to a publicly reachable environment (runbook provided in README, execution pending — requires a cloud account/domain)
 
 ## License
 

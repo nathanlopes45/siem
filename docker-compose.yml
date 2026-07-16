@@ -58,6 +58,20 @@ services:
       - ./app:/app/app
     command: ["python", "-m", "app.worker"]
 
+  syslog:
+    build: .
+    container_name: siem_syslog
+    depends_on:
+      db:
+        condition: service_healthy
+    environment:
+      DATABASE_URL: postgresql://${POSTGRES_USER}:${POSTGRES_PASSWORD}@db:5432/${POSTGRES_DB}
+    ports:
+      - "514:514/udp"
+    volumes:
+      - ./app:/app/app
+    command: ["python", "-m", "app.syslog_listener"]
+
 volumes:
   postgres_data:
   ollama_data:

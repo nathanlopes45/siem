@@ -1,0 +1,66 @@
+name: CI
+
+on:
+  push:
+    branches: [ main ]
+  pull_request:
+    branches: [ main ]
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+
+    services:
+      postgres:
+        image: postgres:15
+        env:
+          POSTGRES_USER: siem_user
+          POSTGRES_PASSWORD: siem_password
+          POSTGRES_DB: siem_db
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U siem_user"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install dependencies
+        run: pip install -r requirements.txt
+
+      - name: Create test database
+        env:
+          PGPASSWORD: siem_password
+        run: psql -h localhost -U siem_user -d postgres -c "CREATE DATABASE siem_test_db;"
+
+      - name: Run test suite
+        env:
+          DATABASE_URL: postgresql://siem_user:siem_password@localhost:5432/siem_db
+          TEST_DATABASE_URL: postgresql://siem_user:siem_password@localhost:5432/siem_test_db
+        run: pytest -v
+
+  secret-scan:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install detect-secrets
+        run: pip install detect-secrets
+
+      - name: Fail if any new secret is detected vs the committed baseline
+        run: |
+          detect-secrets scan --baseline .secrets.baseline
+          git diff --exit-code .secrets.baseline
