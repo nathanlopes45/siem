@@ -63,4 +63,8 @@ jobs:
       - name: Fail if any new secret is detected vs the committed baseline
         run: |
           detect-secrets scan --baseline .secrets.baseline
-          git diff --exit-code .secrets.baseline
+          # generated_at changes on every run regardless of findings — only
+          # fail the build if the actual results changed, not the timestamp
+          jq 'del(.generated_at)' .secrets.baseline > /tmp/new_baseline.json
+          git show HEAD:.secrets.baseline | jq 'del(.generated_at)' > /tmp/old_baseline.json
+          diff /tmp/old_baseline.json /tmp/new_baseline.json
