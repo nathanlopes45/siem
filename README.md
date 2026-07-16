@@ -9,7 +9,11 @@ A custom-built SIEM backend that ingests logs, correlates events, and raises ale
 Most SIEM experience on a resume comes from clicking around Splunk or Sentinel dashboards. This project goes one layer deeper: designing the log schema, writing the correlation logic, and reasoning about detection tradeoffs (false positives, alert fatigue, time-window sizing, ingestion vs. detection latency) myself.
 
 ![Dashboard screenshot](docs/dashboard-screenshot-alert-ID.png)
+*The main dashboard view — alert stream, host roster, and severity breakdown. (Log volume chart, further down the page, not pictured.)*
+
 ![Dashboard screenshot](docs/dashboard-screenshot-log-volume.png)
+*Live stats and the log volume chart at the bottom of the dashboard. (Alert activity pulse strip, at the top of the page, not pictured.)*
+
 
 ## Architecture
 
